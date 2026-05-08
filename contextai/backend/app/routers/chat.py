@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.services.indexing import search_space
+
 logger = logging.getLogger("contextai.chat")
 
 router = APIRouter()
@@ -147,8 +149,20 @@ async def chat_stream(request: ChatRequest):
 
     provider_id, config = provider
 
-    # 2. TODO: Retrieve RAG context from ChromaDB + BM25
-    rag_context = None  # Will be implemented when RAG pipeline is wired
+    # 2. Retrieve RAG context from hybrid search
+    rag_context = None
+    try:
+        rag_results = search_space(request.space_id, request.message, top_k=5)
+        if rag_results:
+            rag_chunks = []
+            for i, result in enumerate(rag_results):
+                source = result.get("source_file", "unknown")
+                text = result.get("text", "")
+                rag_chunks.append(f"[Source: {source}]\n{text}")
+            rag_context = "\n\n---\n\n".join(rag_chunks)
+            logger.info(f"RAG retrieved {len(rag_results)} chunks for query")
+    except Exception as e:
+        logger.warning(f"RAG retrieval failed (non-fatal): {e}")
 
     # 3. Build system prompt
     system_prompt = _build_system_prompt(request.space_id, request.screen_context, rag_context)

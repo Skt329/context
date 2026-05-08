@@ -881,3 +881,96 @@ html, body, #root {
   color: var(--text-muted);
 }
 
+/* ─── File Management ─────────────────────────────────────────── */
+
+.space-card--dragover {
+  border-color: var(--accent) !important;
+  background: var(--accent-subtle) !important;
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.space-files {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  padding: 10px;
+  margin-top: -4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  border: 2px dashed var(--border-hover);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: var(--transition-base);
+  color: var(--text-secondary);
+}
+
+.upload-zone:hover,
+.upload-zone--active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--text-accent);
+}
+
+.upload-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-accent);
+  background: var(--accent-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+  color: var(--text-secondary);
+}
+
+.file-item:hover {
+  background: var(--bg-hover);
+}
+
+.file-item__name {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-item__size {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
