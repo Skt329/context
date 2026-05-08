@@ -69,6 +69,44 @@ async def create_space(space: SpaceCreate):
     return meta
 
 
+@router.put("/{space_id}")
+async def update_space(space_id: str, body: SpaceUpdate):
+    """Update a space's metadata."""
+    from datetime import datetime
+
+    space_dir = os.path.join(DATA_DIR, space_id)
+    meta_path = os.path.join(space_dir, "meta.json")
+    if not os.path.exists(meta_path):
+        raise HTTPException(status_code=404, detail="Space not found")
+
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
+
+    if body.name is not None:
+        meta["name"] = body.name
+    if body.icon is not None:
+        meta["icon"] = body.icon
+    if body.description is not None:
+        meta["description"] = body.description
+
+    meta["updated_at"] = datetime.utcnow().isoformat()
+
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    return meta
+
+
+@router.get("/{space_id}/file-count")
+async def get_file_count(space_id: str):
+    """Get the actual file count for a space from disk."""
+    raw_dir = os.path.join(DATA_DIR, space_id, "raw_files")
+    if not os.path.exists(raw_dir):
+        return {"count": 0}
+    count = sum(1 for f in os.scandir(raw_dir) if f.is_file())
+    return {"count": count}
+
+
 @router.delete("/{space_id}")
 async def delete_space(space_id: str):
     """Delete a space and all its data."""

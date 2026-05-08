@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image } from 'lucide-react';
 import { useAppStore, type ChatAttachment } from '../stores/appStore';
-import { streamChat, captureContext, uploadFile, extractMemoryFromChat } from '../lib/api';
+import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat } from '../lib/api';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 export function ChatView() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
@@ -53,7 +54,7 @@ export function ChatView() {
 
   const handleCaptureContext = async () => {
     if (!backendReady) return;
-    const result = await captureContext();
+    const result = await captureScreenContext();
     if (result && result.length > 0) {
       setScreenContext(result.text);
     }
@@ -179,6 +180,12 @@ export function ChatView() {
         .filter((a) => a.type === 'image' && a.dataUrl)
         .map((a) => ({ data_url: a.dataUrl!, name: a.name }));
 
+      // Build conversation history from all prior messages (exclude current)
+      const conversationHistory = messages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : '',
+      }));
+
       let accumulated = '';
       await streamChat(
         messageContent,
@@ -197,6 +204,7 @@ export function ChatView() {
         },
         activeSpace?.textContext,
         imagePayload,
+        conversationHistory,
       );
     } else {
       const response = `I'm ContextAI running in **offline mode** — the Python backend isn't connected yet.\n\n**To enable real AI responses:**\n1. Open a terminal in \`contextai/backend\`\n2. Run: \`.venv\\\\Scripts\\\\activate\`\n3. Run: \`python -m app.main\`\n4. The status indicator will turn green ✅`;
@@ -330,7 +338,11 @@ export function ChatView() {
                       {a.indexed && <span style={{ color: 'var(--success)', marginLeft: '4px' }}>✓</span>}
                     </div>
                   ))}
-                  {msg.content}
+                  {msg.role === 'assistant' ? (
+                    <MarkdownRenderer content={msg.content} />
+                  ) : (
+                    msg.content
+                  )}
                   {msg.isStreaming && !msg.content && (
                     <span className="loading-dots"><span></span><span></span><span></span></span>
                   )}

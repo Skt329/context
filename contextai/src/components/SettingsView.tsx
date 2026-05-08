@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Eye, EyeOff, ChevronDown, ChevronUp, Zap, Check, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../stores/appStore';
 import { updateProvider, testProvider, fetchOllamaModels } from '../lib/api';
@@ -84,7 +84,8 @@ export function SettingsView() {
     setTesting(null);
   };
 
-  const ollamaProvider = providers.find((p) => p.id === 'ollama');
+
+
 
   return (
     <div className="settings-view">
@@ -342,7 +343,7 @@ export function SettingsView() {
               <div className="setting-row__sublabel">Capture text from active window</div>
             </div>
           </div>
-          <button className="toggle" />
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Coming Soon</span>
         </div>
         <div className="setting-row">
           <div className="setting-row__left">
@@ -351,7 +352,7 @@ export function SettingsView() {
               <div className="setting-row__sublabel">Auto-detect copied text</div>
             </div>
           </div>
-          <button className="toggle" />
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Coming Soon</span>
         </div>
       </div>
 

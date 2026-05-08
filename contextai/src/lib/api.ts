@@ -26,6 +26,7 @@ export async function streamChat(
   onDone: () => void,
   textContext?: string | null,
   images?: { data_url: string; name: string }[],
+  history?: { role: string; content: string }[],
 ): Promise<void> {
   try {
     const res = await fetch(`${BASE_URL}/chat/stream`, {
@@ -37,6 +38,7 @@ export async function streamChat(
         screen_context: screenContext,
         text_context: textContext || null,
         images: images && images.length > 0 ? images : null,
+        history: history && history.length > 0 ? history : null,
       }),
     });
 
@@ -165,16 +167,8 @@ export async function checkOllamaStatus(): Promise<{ running: boolean; model_cou
   }
 }
 
-/** Capture screen context from the backend */
-export async function captureContext(): Promise<{ method: string; text: string; length: number } | null> {
-  try {
-    const res = await fetch(`${BASE_URL}/context/capture`, { method: 'POST' });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
+
+
 
 /** List spaces from the backend */
 export async function listSpaces(): Promise<{ spaces: any[] } | null> {
@@ -199,6 +193,35 @@ export async function createSpace(name: string, icon: string, description: strin
     return await res.json();
   } catch {
     return null;
+  }
+}
+
+/** Update a space on the backend */
+export async function updateSpace(
+  spaceId: string,
+  update: { name?: string; icon?: string; description?: string },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/spaces/${spaceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Get the actual file count for a space from disk */
+export async function getFileCount(spaceId: string): Promise<number> {
+  try {
+    const res = await fetch(`${BASE_URL}/spaces/${spaceId}/file-count`);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return data.count || 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -345,3 +368,122 @@ export async function previewScreenContext(): Promise<{
     return null;
   }
 }
+
+
+// ─── Conversations API ───────────────────────────────────────
+
+export interface ConversationSummary {
+  id: string;
+  spaceId: string;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  lastMessage: string | null;
+}
+
+export interface ConversationFull {
+  id: string;
+  spaceId: string;
+  title: string;
+  messages: {
+    id: string;
+    role: string;
+    content: string;
+    timestamp: string;
+    attachments?: { type: string; name: string; dataUrl?: string; url?: string }[];
+  }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** List conversations (optionally filtered by space) */
+export async function listConversations(spaceId?: string): Promise<ConversationSummary[]> {
+  try {
+    const url = spaceId
+      ? `${BASE_URL}/conversations?space_id=${encodeURIComponent(spaceId)}`
+      : `${BASE_URL}/conversations`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.conversations || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Get a single conversation with full messages */
+export async function getConversation(convoId: string): Promise<ConversationFull | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/conversations/${convoId}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Create a new conversation */
+export async function createConversation(
+  spaceId: string,
+  title: string = 'New Chat',
+): Promise<ConversationFull | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ space_id: spaceId, title }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Update a conversation (title and/or messages) */
+export async function updateConversation(
+  convoId: string,
+  update: {
+    title?: string;
+    messages?: { id: string; role: string; content: string; timestamp: string; attachments?: unknown[] }[];
+  },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/conversations/${convoId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Delete a conversation */
+export async function deleteConversation(convoId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/conversations/${convoId}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+
+// ─── Provider Configs from Backend ───────────────────────────
+
+/** Get all provider configurations from backend settings */
+export async function getProviderConfigs(): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/settings/providers`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+

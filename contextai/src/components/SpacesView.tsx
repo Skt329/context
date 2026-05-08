@@ -1,7 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Plus, Trash2, Upload, FileText, RefreshCw, MessageSquare, ChevronDown, ChevronRight, Save, Type } from 'lucide-react';
 import { useAppStore, type Space } from '../stores/appStore';
-import { uploadFile, listFiles, createSpace } from '../lib/api';
+import { uploadFile, listFiles, createSpace, getFileCount } from '../lib/api';
 
 const SPACE_EMOJIS = ['📁', '💼', '🔬', '📚', '✍️', '💡', '🎯', '🏢', '🛠️', '🎨', '📊', '🌐'];
 
@@ -139,7 +139,7 @@ export function SpacesView() {
     }
   }, []);
 
-  const toggleExpand = (spaceId: string) => {
+    const toggleExpand = (spaceId: string) => {
     if (expandedSpace === spaceId) {
       setExpandedSpace(null);
       setEditingTextContext(null);
@@ -147,6 +147,12 @@ export function SpacesView() {
       setExpandedSpace(spaceId);
       setActiveSpace(spaceId);
       loadFiles(spaceId);
+      // Load real file count from backend
+      getFileCount(spaceId).then((count) => {
+        useAppStore.setState((s) => ({
+          spaces: s.spaces.map((sp) => sp.id === spaceId ? { ...sp, fileCount: count } : sp),
+        }));
+      });
       setEditingTextContext(null);
     }
   };
@@ -205,7 +211,6 @@ export function SpacesView() {
   const saveTextContext = (spaceId: string) => {
     updateSpaceTextContext(spaceId, textContextDraft);
     setEditingTextContext(null);
-    // TODO: Sync to backend
   };
 
   const handleGoToChat = (e: React.MouseEvent, spaceId: string) => {

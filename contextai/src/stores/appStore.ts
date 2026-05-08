@@ -1,5 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import {
+  listConversations,
+  getConversation,
+  createConversation as apiCreateConversation,
+  updateConversation as apiUpdateConversation,
+  deleteConversation as apiDeleteConversation,
+  listSpaces,
+  getProviderConfigs,
+} from '../lib/api';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -67,10 +76,12 @@ interface AppState {
   addSpace: (space: Space) => void;
   deleteSpace: (id: string) => void;
   updateSpaceTextContext: (id: string, textContext: string) => void;
+  setSpaces: (spaces: Space[]) => void;
 
-  // Conversations (per-space, persistent)
+  // Conversations (per-space, backend-persistent)
   conversations: Conversation[];
   activeConversationId: string | null;
+  setConversations: (convos: Conversation[]) => void;
 
   // Derived helpers
   getActiveConversation: () => Conversation | undefined;
@@ -85,13 +96,14 @@ interface AppState {
   loadConversation: (conversationId: string) => void;
   deleteConversation: (conversationId: string) => void;
 
-  // Settings
+  // Settings — providers stay in Zustand for reactivity but are synced to backend
   providers: ProviderConfig[];
   toggleProvider: (id: string) => void;
   updateProviderKey: (id: string, key: string) => void;
   updateProviderModel: (id: string, model: string) => void;
   updateProviderApiBase: (id: string, apiBase: string) => void;
   setOllamaModels: (models: string[]) => void;
+  setProviders: (providers: ProviderConfig[]) => void;
 
   // Context
   screenContext: string | null;
@@ -100,6 +112,10 @@ interface AppState {
   // Backend
   backendReady: boolean;
   setBackendReady: (v: boolean) => void;
+
+  // Hydration
+  hydrateFromBackend: () => Promise<void>;
+  _hydrated: boolean;
 }
 
 // ─── Defaults ────────────────────────────────────────────────
@@ -128,7 +144,7 @@ const defaultSpaces: Space[] = [
   },
 ];
 
-function createConversation(spaceId: string): Conversation {
+function createLocalConversation(spaceId: string): Conversation {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
@@ -147,13 +163,58 @@ function deriveTitle(messages: Message[]): string {
   return text.slice(0, 80) || 'New Chat';
 }
 
+
+// ─── Debounced Backend Sync ──────────────────────────────────
+
+const _syncTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+/**
+ * Debounced write-through to backend. Called after every state mutation
+ * that changes a conversation. Batches rapid updates (e.g., streaming tokens)
+ * into a single API call.
+ */
+function debouncedSyncConversation(convoId: string, delayMs = 1500) {
+  if (_syncTimers[convoId]) clearTimeout(_syncTimers[convoId]);
+  _syncTimers[convoId] = setTimeout(() => {
+    const state = useAppStore.getState();
+    const convo = state.conversations.find((c) => c.id === convoId);
+    if (!convo || !state.backendReady) return;
+
+    // Strip transient fields before syncing
+    const cleanMessages = convo.messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+      attachments: m.attachments?.map((a) => ({
+        name: a.name,
+        type: a.type,
+        size: a.size,
+        indexed: a.indexed,
+        // Strip base64 dataUrls to avoid bloating backend storage
+        // TODO: Phase 4 will save images to disk and store URLs instead
+      })),
+    }));
+
+    apiUpdateConversation(convoId, {
+      title: convo.title,
+      messages: cleanMessages,
+    }).catch((err) => {
+      console.error(`Failed to sync conversation ${convoId}:`, err);
+    });
+
+    delete _syncTimers[convoId];
+  }, delayMs);
+}
+
+
 // ─── Store ───────────────────────────────────────────────────
 
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => {
       // Create the initial conversation for the default space
-      const initialConvo = createConversation(DEFAULT_SPACE_ID);
+      const initialConvo = createLocalConversation(DEFAULT_SPACE_ID);
 
       return {
         // ── UI ──
@@ -163,6 +224,7 @@ export const useAppStore = create<AppState>()(
         // ── Spaces ──
         spaces: defaultSpaces,
         activeSpaceId: DEFAULT_SPACE_ID,
+        setSpaces: (spaces) => set({ spaces }),
 
         setActiveSpace: (id) => {
           const state = get();
@@ -178,21 +240,40 @@ export const useAppStore = create<AppState>()(
             set({ activeSpaceId: id, activeConversationId: latestConvo.id });
           } else {
             // Auto-create a conversation for this space
-            const newConvo = createConversation(id);
+            const newConvo = createLocalConversation(id);
             set({
               activeSpaceId: id,
               activeConversationId: newConvo.id,
               conversations: [...state.conversations, newConvo],
             });
+            // Sync to backend
+            if (state.backendReady) {
+              apiCreateConversation(id, 'New Chat').then((remote) => {
+                if (remote) {
+                  // Update local ID to match backend
+                  set((s) => ({
+                    conversations: s.conversations.map((c) =>
+                      c.id === newConvo.id ? { ...c, id: remote.id } : c
+                    ),
+                    activeConversationId: s.activeConversationId === newConvo.id ? remote.id : s.activeConversationId,
+                  }));
+                }
+              });
+            }
           }
         },
 
         addSpace: (space) => {
-          const newConvo = createConversation(space.id);
-          set((state) => ({
-            spaces: [...state.spaces, space],
-            conversations: [...state.conversations, newConvo],
+          const newConvo = createLocalConversation(space.id);
+          set((s) => ({
+            spaces: [...s.spaces, space],
+            conversations: [...s.conversations, newConvo],
           }));
+          // Backend sync for new conversation
+          const currentState = get();
+          if (currentState.backendReady) {
+            apiCreateConversation(space.id, 'New Chat');
+          }
         },
 
         deleteSpace: (id) => set((state) => {
@@ -227,6 +308,7 @@ export const useAppStore = create<AppState>()(
         // ── Conversations ──
         conversations: [initialConvo],
         activeConversationId: initialConvo.id,
+        setConversations: (convos) => set({ conversations: convos }),
 
         getActiveConversation: () => {
           const state = get();
@@ -243,14 +325,14 @@ export const useAppStore = create<AppState>()(
         isGenerating: false,
         setIsGenerating: (v) => set({ isGenerating: v }),
 
-        addMessage: (msg) => set((state) => {
+        addMessage: (msg) => {
+          const state = get();
           const convoId = state.activeConversationId;
-          if (!convoId) return state;
+          if (!convoId) return;
 
-          return {
+          set((state) => ({
             conversations: state.conversations.map((c) => {
               if (c.id !== convoId) return c;
-
               const updatedMessages = [...c.messages, msg];
               return {
                 ...c,
@@ -259,14 +341,18 @@ export const useAppStore = create<AppState>()(
                 updatedAt: new Date().toISOString(),
               };
             }),
-          };
-        }),
+          }));
 
-        updateMessage: (id, content) => set((state) => {
+          // Debounced write-through to backend
+          debouncedSyncConversation(convoId);
+        },
+
+        updateMessage: (id, content) => {
+          const state = get();
           const convoId = state.activeConversationId;
-          if (!convoId) return state;
+          if (!convoId) return;
 
-          return {
+          set((state) => ({
             conversations: state.conversations.map((c) => {
               if (c.id !== convoId) return c;
               return {
@@ -277,8 +363,11 @@ export const useAppStore = create<AppState>()(
                 updatedAt: new Date().toISOString(),
               };
             }),
-          };
-        }),
+          }));
+
+          // Debounced write-through — streaming will batch many updates
+          debouncedSyncConversation(convoId, 2000);
+        },
 
         newChat: () => {
           const state = get();
@@ -288,17 +377,46 @@ export const useAppStore = create<AppState>()(
           const current = state.conversations.find((c) => c.id === state.activeConversationId);
           if (current && current.messages.length === 0) return;
 
-          const newConvo = createConversation(spaceId);
+          const newConvo = createLocalConversation(spaceId);
           set({
             conversations: [...state.conversations, newConvo],
             activeConversationId: newConvo.id,
           });
+
+          // Create on backend
+          if (state.backendReady) {
+            apiCreateConversation(spaceId, 'New Chat').then((remote) => {
+              if (remote) {
+                set((s) => ({
+                  conversations: s.conversations.map((c) =>
+                    c.id === newConvo.id ? { ...c, id: remote.id } : c
+                  ),
+                  activeConversationId: s.activeConversationId === newConvo.id ? remote.id : s.activeConversationId,
+                }));
+              }
+            });
+          }
         },
 
         loadConversation: (conversationId) => {
           const state = get();
           const convo = state.conversations.find((c) => c.id === conversationId);
-          if (!convo) return;
+          if (!convo) {
+            // Try loading from backend if not in local state
+            if (state.backendReady) {
+              getConversation(conversationId).then((remote) => {
+                if (remote) {
+                  set((s) => ({
+                    conversations: [...s.conversations, remote as unknown as Conversation],
+                    activeConversationId: conversationId,
+                    activeSpaceId: remote.spaceId,
+                    activeTab: 'chat',
+                  }));
+                }
+              });
+            }
+            return;
+          }
 
           set({
             activeConversationId: conversationId,
@@ -307,32 +425,40 @@ export const useAppStore = create<AppState>()(
           });
         },
 
-        deleteConversation: (conversationId) => set((state) => {
-          const filtered = state.conversations.filter((c) => c.id !== conversationId);
-          let newActiveId = state.activeConversationId;
-
-          if (state.activeConversationId === conversationId) {
-            // Switch to the latest conversation in the same space, or create new
-            const sameSpace = filtered.filter((c) => c.spaceId === state.activeSpaceId);
-            if (sameSpace.length > 0) {
-              newActiveId = sameSpace.sort(
-                (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-              )[0].id;
-            } else {
-              const newConvo = createConversation(state.activeSpaceId);
-              filtered.push(newConvo);
-              newActiveId = newConvo.id;
-            }
+        deleteConversation: (conversationId) => {
+          // Fire backend delete (non-blocking)
+          const state = get();
+          if (state.backendReady) {
+            apiDeleteConversation(conversationId);
           }
 
-          return {
-            conversations: filtered,
-            activeConversationId: newActiveId,
-          };
-        }),
+          set((state) => {
+            const filtered = state.conversations.filter((c) => c.id !== conversationId);
+            let newActiveId = state.activeConversationId;
+
+            if (state.activeConversationId === conversationId) {
+              const sameSpace = filtered.filter((c) => c.spaceId === state.activeSpaceId);
+              if (sameSpace.length > 0) {
+                newActiveId = sameSpace.sort(
+                  (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+                )[0].id;
+              } else {
+                const newConvo = createLocalConversation(state.activeSpaceId);
+                filtered.push(newConvo);
+                newActiveId = newConvo.id;
+              }
+            }
+
+            return {
+              conversations: filtered,
+              activeConversationId: newActiveId,
+            };
+          });
+        },
 
         // ── Settings ──
         providers: defaultProviders,
+        setProviders: (providers) => set({ providers }),
         toggleProvider: (id) => set((state) => ({
           providers: state.providers.map((p) => p.id === id ? { ...p, enabled: !p.enabled } : p),
         })),
@@ -364,20 +490,103 @@ export const useAppStore = create<AppState>()(
         // ── Backend ──
         backendReady: false,
         setBackendReady: (v) => set({ backendReady: v }),
+
+        // ── Hydration from backend ──
+        _hydrated: false,
+        hydrateFromBackend: async () => {
+          const state = get();
+          if (state._hydrated) return;
+
+          try {
+            // 1. Hydrate spaces from backend
+            const spacesResult = await listSpaces();
+            if (spacesResult?.spaces && spacesResult.spaces.length > 0) {
+              const hydrated: Space[] = spacesResult.spaces.map((s: any) => ({
+                id: s.id,
+                name: s.name,
+                icon: s.icon || '📁',
+                description: s.description || '',
+                fileCount: s.file_count || 0,
+                lastUsed: s.updated_at || null,
+                createdAt: s.created_at || new Date().toISOString(),
+                textContext: s.text_context,
+              }));
+              set({ spaces: hydrated });
+            }
+
+            // 2. Hydrate conversations from backend
+            const convos = await listConversations();
+            if (convos.length > 0) {
+              // Load full messages for each conversation
+              const fullConvos: Conversation[] = [];
+              for (const summary of convos) {
+                const full = await getConversation(summary.id);
+                if (full) {
+                  fullConvos.push({
+                    id: full.id,
+                    spaceId: full.spaceId,
+                    title: full.title,
+                    messages: (full.messages || []).map((m) => ({
+                      id: m.id,
+                      role: m.role as 'user' | 'assistant',
+                      content: m.content,
+                      timestamp: m.timestamp,
+                      attachments: m.attachments as ChatAttachment[] | undefined,
+                    })),
+                    createdAt: full.createdAt,
+                    updatedAt: full.updatedAt,
+                  });
+                }
+              }
+
+              if (fullConvos.length > 0) {
+                const activeSpace = get().activeSpaceId;
+                const spaceConvos = fullConvos.filter((c) => c.spaceId === activeSpace);
+                const latest = spaceConvos.sort(
+                  (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+                )[0];
+
+                set({
+                  conversations: fullConvos,
+                  activeConversationId: latest?.id || fullConvos[0].id,
+                });
+              }
+            }
+            // 3. Hydrate provider API keys from backend settings.json
+            const backendProviders = await getProviderConfigs();
+            if (backendProviders) {
+              const currentProviders = get().providers;
+              const mergedProviders = currentProviders.map((p) => {
+                const backend = (backendProviders as Record<string, any>)[p.id];
+                if (!backend) return p;
+                return {
+                  ...p,
+                  enabled: backend.enabled ?? p.enabled,
+                  apiKey: backend.has_key ? (p.apiKey || '••••••') : p.apiKey,
+                  model: backend.model || p.model,
+                  apiBase: backend.api_base || p.apiBase,
+                };
+              });
+              set({ providers: mergedProviders });
+            }
+          } catch (err) {
+            console.error('Failed to hydrate from backend:', err);
+          }
+
+          set({ _hydrated: true });
+        },
       };
     },
     {
       name: 'contextai-store',
-      // Persist everything except ephemeral state
+      // Only persist UI preferences — NOT data (that lives on backend)
       partialize: (state) => ({
-        spaces: state.spaces,
         activeSpaceId: state.activeSpaceId,
-        conversations: state.conversations.map((c) => ({
-          ...c,
-          // Strip streaming flags on save
-          messages: c.messages.map((m) => ({ ...m, isStreaming: false })),
-        })),
+        activeTab: state.activeTab,
         activeConversationId: state.activeConversationId,
+        // Keep providers in localStorage for offline/fallback, but keys are
+        // synced to backend on connect. This is acceptable since settings.json
+        // is the canonical store.
         providers: state.providers,
       }),
       // Merge hydrated state with defaults for transient fields
@@ -388,7 +597,9 @@ export const useAppStore = create<AppState>()(
         isGenerating: false,
         backendReady: false,
         screenContext: null,
-        activeTab: 'chat' as Tab,
+        _hydrated: false,
+        // Ensure conversations start empty — hydrated from backend
+        conversations: current.conversations,
       }),
     },
   ),

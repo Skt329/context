@@ -27,6 +27,12 @@ class ChatImage(BaseModel):
     name: str | None = None
 
 
+class HistoryMessage(BaseModel):
+    """A single message from conversation history."""
+    role: str  # 'user' | 'assistant'
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
     space_id: str
@@ -34,6 +40,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     text_context: str | None = None
     images: list[ChatImage] | None = None  # Multi-modal image attachments
+    history: list[HistoryMessage] | None = None  # Prior conversation messages
 
 
 class RateRequest(BaseModel):
@@ -115,6 +122,60 @@ def _build_system_prompt(
         parts.append(f"\n## Current Screen Context\nThe user's active window contains:\n{screen_context[:2000]}")
 
     return "\n\n".join(parts)
+
+
+# ─── Smart Token-Budget History Trimming ──────────────────────
+
+MAX_HISTORY_TOKENS = 6000  # Budget for conversation history
+CHARS_PER_TOKEN = 4  # Conservative estimate (English text averages ~4 chars/token)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count from character length."""
+    return len(text) // CHARS_PER_TOKEN
+
+
+def _trim_history_to_budget(
+    history: list[HistoryMessage],
+    budget_tokens: int = MAX_HISTORY_TOKENS,
+) -> list[dict]:
+    """Trim conversation history to fit within token budget.
+
+    Strategy:
+    - Always keep the first user message (establishes topic)
+    - Fill remaining budget from most recent messages backward
+    - Never split a user/assistant pair
+    - Returns OpenAI-format message dicts
+    """
+    if not history:
+        return []
+
+    messages = [{"role": h.role, "content": h.content} for h in history]
+
+    # If everything fits, return all
+    total_tokens = sum(_estimate_tokens(m["content"]) for m in messages)
+    if total_tokens <= budget_tokens:
+        return messages
+
+    # Always keep first message (topic anchor)
+    result_head = [messages[0]] if messages else []
+    head_tokens = _estimate_tokens(messages[0]["content"]) if messages else 0
+    remaining_budget = budget_tokens - head_tokens
+
+    # Fill from the end (most recent first)
+    result_tail = []
+    for msg in reversed(messages[1:]):
+        msg_tokens = _estimate_tokens(msg["content"])
+        if msg_tokens > remaining_budget:
+            break
+        result_tail.insert(0, msg)
+        remaining_budget -= msg_tokens
+
+    # If the head message is also the first tail message, don't duplicate
+    if result_tail and result_tail[0] == result_head[0]:
+        return result_tail
+
+    return result_head + result_tail
 
 
 def _build_user_content(message: str, images: list[ChatImage] | None = None):
@@ -210,12 +271,18 @@ async def chat_stream(request: ChatRequest):
     # 3. Build system prompt
     system_prompt = _build_system_prompt(request.space_id, request.screen_context, rag_context, request.text_context)
 
-    # 4. Build message list (multi-modal if images present)
+    # 4. Build message list with conversation history
     user_content = _build_user_content(request.message, request.images)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Inject trimmed conversation history
+    if request.history:
+        trimmed = _trim_history_to_budget(request.history)
+        messages.extend(trimmed)
+        logger.info(f"Injected {len(trimmed)}/{len(request.history)} history messages (token-budgeted)")
+
+    messages.append({"role": "user", "content": user_content})
 
     # 5. Stream response
     return StreamingResponse(

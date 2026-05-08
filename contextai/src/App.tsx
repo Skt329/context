@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import './index.css';
 import { TitleBar } from './components/TitleBar';
 import { TabNav } from './components/TabNav';
@@ -13,17 +13,36 @@ function App() {
   const activeTab = useAppStore((s) => s.activeTab);
   const setBackendReady = useAppStore((s) => s.setBackendReady);
   const setOllamaModels = useAppStore((s) => s.setOllamaModels);
+  const hydrateFromBackend = useAppStore((s) => s.hydrateFromBackend);
 
-  // Poll backend health — fast when disconnected, relaxed when connected
+  // Guard against StrictMode double-mount (Mi2)
+  const pollRef = useRef(false);
+
   useEffect(() => {
+    if (pollRef.current) return; // Prevent double-poll in StrictMode
+    pollRef.current = true;
+
     let alive = true;
     let ollamaDetected = false;
+    let wasReady = false;
+    let hydrated = false;
 
     const poll = async () => {
       while (alive) {
         const health = await checkHealth();
         const isReady = health?.status === 'ok';
-        setBackendReady(isReady);
+
+        // Only update Zustand when value changes to avoid re-render spam
+        if (isReady !== wasReady) {
+          setBackendReady(isReady);
+          wasReady = isReady;
+        }
+
+        // Hydrate state from backend on first successful connection
+        if (isReady && !hydrated) {
+          hydrated = true;
+          await hydrateFromBackend();
+        }
 
         // Detect Ollama models once backend is ready
         if (isReady && !ollamaDetected) {
@@ -46,7 +65,7 @@ function App() {
 
     poll();
     return () => { alive = false; };
-  }, [setBackendReady, setOllamaModels]);
+  }, [setBackendReady, setOllamaModels, hydrateFromBackend]);
 
   const renderContent = () => {
     switch (activeTab) {

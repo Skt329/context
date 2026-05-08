@@ -57,12 +57,10 @@
       "open": true
     },
     "updater": {
-      "active": true,
-      "dialog": true,
+      "active": false,
+      "dialog": false,
       "pubkey": "",
-      "endpoints": [
-        "https://github.com/YOUR_USERNAME/contextai/releases/latest/download/latest.json"
-      ]
+      "endpoints": []
     }
   }
 }
