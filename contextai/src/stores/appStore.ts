@@ -49,6 +49,7 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   color: string;
+  apiBase?: string;
   availableModels?: string[];
 }
 
@@ -89,6 +90,7 @@ interface AppState {
   toggleProvider: (id: string) => void;
   updateProviderKey: (id: string, key: string) => void;
   updateProviderModel: (id: string, model: string) => void;
+  updateProviderApiBase: (id: string, apiBase: string) => void;
   setOllamaModels: (models: string[]) => void;
 
   // Context
@@ -109,7 +111,7 @@ const defaultProviders: ProviderConfig[] = [
   { id: 'gemini', name: 'Google Gemini', enabled: false, apiKey: '', model: 'gemini-2.0-flash', color: '#4285f4' },
   { id: 'mistral', name: 'Mistral', enabled: false, apiKey: '', model: 'mistral-large-latest', color: '#ff7000' },
   { id: 'deepseek', name: 'DeepSeek', enabled: false, apiKey: '', model: 'deepseek-chat', color: '#0066ff' },
-  { id: 'azure', name: 'Azure OpenAI', enabled: false, apiKey: '', model: 'gpt-4o', color: '#0078d4' },
+  { id: 'azure', name: 'Azure OpenAI', enabled: false, apiKey: '', model: 'gpt-4.1-mini', color: '#0078d4', apiBase: '' },
 ];
 
 const DEFAULT_SPACE_ID = 'default';
@@ -339,6 +341,9 @@ export const useAppStore = create<AppState>()(
         })),
         updateProviderModel: (id, model) => set((state) => ({
           providers: state.providers.map((p) => p.id === id ? { ...p, model } : p),
+        })),
+        updateProviderApiBase: (id, apiBase) => set((state) => ({
+          providers: state.providers.map((p) => p.id === id ? { ...p, apiBase } : p),
         })),
         setOllamaModels: (models) => set((state) => ({
           providers: state.providers.map((p) => {

@@ -118,7 +118,9 @@ html, body, #root {
 .title-bar__logo {
   width: 22px;
   height: 22px;
-  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  background: linear-gradient(135deg, var(--accent), #a78bfa, #c084fc);
+  background-size: 200% 200%;
+  animation: logo-shimmer 4s ease-in-out infinite;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -126,6 +128,12 @@ html, body, #root {
   font-weight: 700;
   font-size: 11px;
   color: white;
+  box-shadow: 0 0 8px rgba(139, 124, 246, 0.3);
+}
+
+@keyframes logo-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 .title-bar__title {
@@ -1172,4 +1180,54 @@ html, body, #root {
   padding: 4px 10px !important;
   font-size: 11px !important;
   gap: 4px;
+}
+
+
+/* ─── Template Grid ──────────────────────────────────────── */
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px;
+}
+
+.template-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.template-card:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.template-card--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.template-card__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.template-card__name {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
 }

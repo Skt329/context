@@ -1,9 +1,54 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Upload, FileText, RefreshCw, MessageSquare, ChevronDown, ChevronRight, Save, Type } from 'lucide-react';
 import { useAppStore, type Space } from '../stores/appStore';
-import { uploadFile, listFiles } from '../lib/api';
+import { uploadFile, listFiles, createSpace } from '../lib/api';
 
 const SPACE_EMOJIS = ['📁', '💼', '🔬', '📚', '✍️', '💡', '🎯', '🏢', '🛠️', '🎨', '📊', '🌐'];
+
+const SPACE_TEMPLATES = [
+  {
+    id: 'job-apps',
+    name: 'Job Applications',
+    icon: '💼',
+    description: 'Track and prepare for job applications',
+    textContext: 'This space is for job applications. I upload job descriptions and my resume/portfolio here. Help me:\n- Tailor my resume for each role\n- Write cover letters matching my tone\n- Prepare for interviews based on the JD\n- Draft follow-up emails',
+  },
+  {
+    id: 'research',
+    name: 'Research Project',
+    icon: '🔬',
+    description: 'Organize research papers and notes',
+    textContext: 'This space is for research. I upload papers, articles, and notes here. Help me:\n- Summarize papers and extract key findings\n- Compare methodologies across papers\n- Draft literature reviews\n- Identify gaps and suggest future directions',
+  },
+  {
+    id: 'client-work',
+    name: 'Client Work',
+    icon: '🏢',
+    description: 'Manage client projects and communications',
+    textContext: 'This space is for client work. I upload project briefs, contracts, and communication history here. Help me:\n- Draft professional client emails\n- Summarize project requirements\n- Create status reports and updates\n- Prepare meeting agendas and notes',
+  },
+  {
+    id: 'study',
+    name: 'Study Notes',
+    icon: '📚',
+    description: 'Study materials and exam preparation',
+    textContext: 'This space is for studying. I upload textbook chapters, lecture notes, and study guides here. Help me:\n- Create concise summaries and flashcards\n- Explain complex concepts simply\n- Generate practice questions\n- Connect ideas across topics',
+  },
+  {
+    id: 'coding',
+    name: 'Code Assistant',
+    icon: '🛠️',
+    description: 'Code review, debugging, and documentation',
+    textContext: 'This space is for coding assistance. I upload code files, documentation, and architecture diagrams here. Help me:\n- Review code for bugs and improvements\n- Explain complex code sections\n- Generate documentation and tests\n- Suggest refactoring patterns',
+  },
+  {
+    id: 'writing',
+    name: 'Writing & Content',
+    icon: '✍️',
+    description: 'Creative and professional writing',
+    textContext: 'This space is for writing projects. I upload drafts, reference materials, and style guides here. Help me:\n- Edit and improve my writing\n- Match my writing style and tone\n- Draft blog posts, articles, and social media content\n- Proofread and suggest improvements',
+  },
+];
 
 interface SpaceFile {
   name: string;
@@ -16,6 +61,7 @@ export function SpacesView() {
   const activeSpaceId = useAppStore((s) => s.activeSpaceId);
   const setActiveSpace = useAppStore((s) => s.setActiveSpace);
   const addSpace = useAppStore((s) => s.addSpace);
+  const backendReady = useAppStore((s) => s.backendReady);
   const deleteSpace = useAppStore((s) => s.deleteSpace);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const updateSpaceTextContext = useAppStore((s) => s.updateSpaceTextContext);
@@ -24,6 +70,7 @@ export function SpacesView() {
   const [newName, setNewName] = useState('');
   const [newIcon, setNewIcon] = useState('📁');
   const [newDesc, setNewDesc] = useState('');
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   // File management state
   const [expandedSpace, setExpandedSpace] = useState<string | null>(null);
@@ -37,16 +84,37 @@ export function SpacesView() {
   const [editingTextContext, setEditingTextContext] = useState<string | null>(null);
   const [textContextDraft, setTextContextDraft] = useState('');
 
-  const handleCreate = () => {
+  const applyTemplate = (templateId: string) => {
+    const template = SPACE_TEMPLATES.find((t) => t.id === templateId);
+    if (!template) return;
+    setSelectedTemplate(templateId);
+    setNewName(template.name);
+    setNewIcon(template.icon);
+    setNewDesc(template.description);
+  };
+
+  const handleCreate = async () => {
     if (!newName.trim()) return;
+    const template = selectedTemplate ? SPACE_TEMPLATES.find((t) => t.id === selectedTemplate) : null;
+
+    // Create on backend first so disk directories exist
+    let spaceId = crypto.randomUUID();
+    if (backendReady) {
+      const backendResult = await createSpace(newName.trim(), newIcon, newDesc.trim());
+      if (backendResult?.id) {
+        spaceId = backendResult.id;
+      }
+    }
+
     const space: Space = {
-      id: crypto.randomUUID(),
+      id: spaceId,
       name: newName.trim(),
       icon: newIcon,
       description: newDesc.trim(),
       fileCount: 0,
       lastUsed: null,
       createdAt: new Date().toISOString(),
+      textContext: template?.textContext,
     };
     addSpace(space);
     setActiveSpace(space.id);
@@ -54,6 +122,7 @@ export function SpacesView() {
     setNewName('');
     setNewDesc('');
     setNewIcon('📁');
+    setSelectedTemplate(null);
   };
 
   const handleDelete = (e: React.MouseEvent, id: string) => {
@@ -316,6 +385,35 @@ export function SpacesView() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal__title">Create Space</h3>
             
+            {/* Template Picker */}
+            <div style={{ marginBottom: '4px' }}>
+              <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>Start from Template</label>
+              <div className="template-grid">
+                {SPACE_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    className={`template-card ${selectedTemplate === t.id ? 'template-card--selected' : ''}`}
+                    onClick={() => applyTemplate(t.id)}
+                  >
+                    <span className="template-card__icon">{t.icon}</span>
+                    <span className="template-card__name">{t.name}</span>
+                  </button>
+                ))}
+                <button
+                  className={`template-card ${selectedTemplate === null ? 'template-card--selected' : ''}`}
+                  onClick={() => {
+                    setSelectedTemplate(null);
+                    setNewName('');
+                    setNewIcon('📁');
+                    setNewDesc('');
+                  }}
+                >
+                  <span className="template-card__icon">📁</span>
+                  <span className="template-card__name">Blank</span>
+                </button>
+              </div>
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
                 <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>Icon</label>

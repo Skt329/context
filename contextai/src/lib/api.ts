@@ -109,7 +109,7 @@ export async function syncProviders(providers: Record<string, unknown>): Promise
 /** Update a single provider config */
 export async function updateProvider(
   providerId: string,
-  update: { enabled?: boolean; api_key?: string; model?: string },
+  update: { enabled?: boolean; api_key?: string; model?: string; api_base?: string },
 ): Promise<boolean> {
   try {
     const res = await fetch(`${BASE_URL}/settings/providers/${providerId}`, {

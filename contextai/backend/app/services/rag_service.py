@@ -19,17 +19,26 @@ logger = logging.getLogger("contextai.rag")
 
 DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai")
 
-# Global FlashRank reranker (loaded once)
+# Global FlashRank reranker (loaded once at startup)
 _reranker = None
+_reranker_failed = False
 
 
 def _get_reranker():
-    """Lazy-load FlashRank reranker (downloads model on first use)."""
-    global _reranker
+    """Lazy-load FlashRank reranker (downloads model on first use).
+    If download fails, mark as permanently unavailable for this session."""
+    global _reranker, _reranker_failed
+    if _reranker_failed:
+        return None
     if _reranker is None:
-        from flashrank import Ranker
-        _reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir=os.path.join(DATA_DIR, "models"))
-        logger.info("FlashRank reranker loaded")
+        try:
+            from flashrank import Ranker
+            _reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir=os.path.join(DATA_DIR, "models"))
+            logger.info("FlashRank reranker loaded")
+        except Exception as e:
+            logger.warning(f"FlashRank reranker unavailable (will use RRF only): {e}")
+            _reranker_failed = True
+            return None
     return _reranker
 
 
@@ -279,6 +288,8 @@ class SpaceIndex:
             from flashrank import RerankRequest
 
             reranker = _get_reranker()
+            if reranker is None:
+                return candidates
             passages = [{"id": c["id"], "text": c["text"], "meta": c} for c in candidates]
 
             rerank_request = RerankRequest(query=query, passages=passages)

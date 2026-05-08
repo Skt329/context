@@ -41,11 +41,28 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": []
+    "resources": [],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": null
+      }
+    },
+    "shortDescription": "Personal AI assistant with contextual awareness",
+    "longDescription": "ContextAI brings together document RAG, multi-provider LLMs, persistent memory, and screen context into a lightweight desktop assistant."
   },
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/YOUR_USERNAME/contextai/releases/latest/download/latest.json"
+      ]
     }
   }
 }

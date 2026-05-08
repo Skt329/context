@@ -226,10 +226,40 @@ export function ChatView() {
   };
 
   const quickActions = [
-    { label: 'Summarize this', icon: <BookOpen size={12} /> },
-    { label: 'Draft email', icon: <Mail size={12} /> },
-    { label: 'Explain code', icon: <FileText size={12} /> },
-    { label: 'Quick answer', icon: <Sparkles size={12} /> },
+    {
+      label: 'Summarize this',
+      icon: <BookOpen size={12} />,
+      prompt: screenContext
+        ? 'Summarize the following screen context concisely:'
+        : 'Summarize the uploaded documents in this space.',
+    },
+    {
+      label: 'Draft email',
+      icon: <Mail size={12} />,
+      prompt: 'Draft a professional email based on the current context. Keep it concise and actionable.',
+    },
+    {
+      label: 'Explain code',
+      icon: <FileText size={12} />,
+      prompt: screenContext
+        ? 'Explain the code on my screen. Focus on what it does and any potential issues.'
+        : 'Explain the code in the uploaded files. Focus on architecture and key decisions.',
+    },
+    {
+      label: 'Quick answer',
+      icon: <Sparkles size={12} />,
+      prompt: 'Give me a quick, direct answer based on the available context.',
+    },
+    {
+      label: 'Cover letter',
+      icon: <FileText size={12} />,
+      prompt: 'Write a tailored cover letter based on my profile and the job description in the current context. Match my writing style.',
+    },
+    {
+      label: 'Cold email',
+      icon: <Mail size={12} />,
+      prompt: 'Draft a personalized cold outreach email based on the current context. Be concise and professional.',
+    },
   ];
 
   return (
@@ -280,7 +310,7 @@ export function ChatView() {
             </div>
             <div className="chat-empty__actions">
               {quickActions.map((action) => (
-                <button key={action.label} className="quick-action" onClick={() => setInput(action.label)}>
+                <button key={action.label} className="quick-action" onClick={() => setInput(action.prompt)}>
                   {action.icon} {action.label}
                 </button>
               ))}

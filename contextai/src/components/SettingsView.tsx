@@ -8,6 +8,7 @@ export function SettingsView() {
   const toggleProvider = useAppStore((s) => s.toggleProvider);
   const updateProviderKey = useAppStore((s) => s.updateProviderKey);
   const updateProviderModel = useAppStore((s) => s.updateProviderModel);
+  const updateProviderApiBase = useAppStore((s) => s.updateProviderApiBase);
   const setOllamaModels = useAppStore((s) => s.setOllamaModels);
   const backendReady = useAppStore((s) => s.backendReady);
 
@@ -40,14 +41,15 @@ export function SettingsView() {
   const handleKeyBlur = async (id: string) => {
     const provider = providers.find((p) => p.id === id);
     if (provider && backendReady && provider.apiKey) {
-      await updateProvider(id, { api_key: provider.apiKey, model: provider.model });
+      await updateProvider(id, { api_key: provider.apiKey, model: provider.model, api_base: provider.apiBase || undefined });
     }
   };
 
   const handleModelChange = async (id: string, model: string) => {
     updateProviderModel(id, model);
     if (backendReady) {
-      await updateProvider(id, { model });
+      const provider = providers.find((p) => p.id === id);
+      await updateProvider(id, { model, api_base: provider?.apiBase || undefined });
     }
   };
 
@@ -73,6 +75,7 @@ export function SettingsView() {
         enabled: provider.enabled,
         api_key: provider.apiKey,
         model: provider.model,
+        api_base: provider.apiBase || undefined,
       });
     }
 
@@ -234,6 +237,32 @@ export function SettingsView() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Endpoint URL — shown for Azure and any provider needing a custom base URL */}
+                      {(provider.id === 'azure' || provider.apiBase) && (
+                        <div>
+                          <label style={{
+                            fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)',
+                            marginBottom: '4px', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px',
+                          }}>
+                            Endpoint URL {provider.id === 'azure' && <span style={{ color: 'var(--error)', fontWeight: 400, textTransform: 'none' }}>(required)</span>}
+                          </label>
+                          <input
+                            className="input-field"
+                            type="text"
+                            placeholder={provider.id === 'azure' ? 'https://your-resource.openai.azure.com/' : 'Custom API base URL'}
+                            value={provider.apiBase || ''}
+                            onChange={(e) => updateProviderApiBase(provider.id, e.target.value)}
+                            onBlur={() => handleKeyBlur(provider.id)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          {provider.id === 'azure' && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                              Found in Azure Portal → Your OpenAI Resource → Keys & Endpoint
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Model name for cloud providers */}
                       <div>

@@ -14,7 +14,7 @@ function App() {
   const setBackendReady = useAppStore((s) => s.setBackendReady);
   const setOllamaModels = useAppStore((s) => s.setOllamaModels);
 
-  // Poll backend health every 5 seconds & detect Ollama models on connect
+  // Poll backend health — fast when disconnected, relaxed when connected
   useEffect(() => {
     let alive = true;
     let ollamaDetected = false;
@@ -39,7 +39,8 @@ function App() {
           }
         }
 
-        await new Promise((r) => setTimeout(r, 5000));
+        // Poll fast (5s) when disconnected, slow (30s) when connected
+        await new Promise((r) => setTimeout(r, isReady ? 30000 : 5000));
       }
     };
 

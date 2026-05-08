@@ -17,8 +17,7 @@ router = APIRouter()
 async def upload_file_endpoint(space_id: str, file: UploadFile = File(...)):
     """Upload a file to a Space, parse, chunk, and index it."""
     space_dir = os.path.join(DATA_DIR, space_id)
-    if not os.path.exists(space_dir):
-        raise HTTPException(status_code=404, detail="Space not found")
+    os.makedirs(space_dir, exist_ok=True)
 
     raw_dir = os.path.join(space_dir, "raw_files")
     os.makedirs(raw_dir, exist_ok=True)
