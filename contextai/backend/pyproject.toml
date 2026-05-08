@@ -1,0 +1,31 @@
+[project]
+name = "contextai-backend"
+version = "0.1.0"
+description = "ContextAI Python Backend — RAG, Memory, LLM Router, Screen Context"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "litellm>=1.50.0",
+    "chromadb>=0.5.0",
+    "bm25s>=0.2.0",
+    "flashrank>=0.2.0",
+    "sentence-transformers>=3.0.0",
+    "llama-index-core>=0.12.0",
+    "llama-index-readers-file>=0.4.0",
+    "pydantic>=2.0.0",
+    "pyperclip>=1.8.0",
+    "mss>=9.0.0",
+    "python-multipart>=0.0.9",
+    "aiofiles>=24.0.0",
+]
+
+[project.optional-dependencies]
+windows = [
+    "uiautomation>=2.0.18",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
