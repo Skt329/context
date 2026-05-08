@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import chat, spaces, files, settings, context
+from app.routers import chat, spaces, files, settings, context, memory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -94,6 +94,7 @@ app.include_router(spaces.router, prefix="/api/spaces", tags=["Spaces"])
 app.include_router(files.router, prefix="/api/files", tags=["Files"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(context.router, prefix="/api/context", tags=["Context"])
+app.include_router(memory.router, prefix="/api/memory", tags=["Memory"])
 
 
 @app.get("/api/health")

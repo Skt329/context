@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
-import { Plus, Trash2, Upload, FileText, RefreshCw, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Plus, Trash2, Upload, FileText, RefreshCw, MessageSquare, ChevronDown, ChevronRight, Save, Type } from 'lucide-react';
 import { useAppStore, type Space } from '../stores/appStore';
 import { uploadFile, listFiles } from '../lib/api';
 
@@ -18,6 +18,7 @@ export function SpacesView() {
   const addSpace = useAppStore((s) => s.addSpace);
   const deleteSpace = useAppStore((s) => s.deleteSpace);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const updateSpaceTextContext = useAppStore((s) => s.updateSpaceTextContext);
 
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -31,6 +32,10 @@ export function SpacesView() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Text context editing
+  const [editingTextContext, setEditingTextContext] = useState<string | null>(null);
+  const [textContextDraft, setTextContextDraft] = useState('');
 
   const handleCreate = () => {
     if (!newName.trim()) return;
@@ -49,13 +54,13 @@ export function SpacesView() {
     setNewName('');
     setNewDesc('');
     setNewIcon('📁');
-    setActiveTab('chat');
   };
 
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (spaces.length <= 1) return;
     deleteSpace(id);
+    if (expandedSpace === id) setExpandedSpace(null);
   };
 
   const loadFiles = useCallback(async (spaceId: string) => {
@@ -65,13 +70,15 @@ export function SpacesView() {
     }
   }, []);
 
-  const toggleExpand = (e: React.MouseEvent, spaceId: string) => {
-    e.stopPropagation();
+  const toggleExpand = (spaceId: string) => {
     if (expandedSpace === spaceId) {
       setExpandedSpace(null);
+      setEditingTextContext(null);
     } else {
       setExpandedSpace(spaceId);
+      setActiveSpace(spaceId);
       loadFiles(spaceId);
+      setEditingTextContext(null);
     }
   };
 
@@ -80,13 +87,11 @@ export function SpacesView() {
     setUploading(true);
     setUploadStatus(null);
 
-    let successCount = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       setUploadStatus(`Uploading ${file.name}...`);
       const result = await uploadFile(spaceId, file);
       if (result) {
-        successCount++;
         const indexing = result.indexing;
         if (indexing?.status === 'indexed') {
           setUploadStatus(`✓ ${file.name} — ${indexing.chunks_created} chunks indexed`);
@@ -96,10 +101,8 @@ export function SpacesView() {
       }
     }
 
-    // Refresh file list
     await loadFiles(spaceId);
     setUploading(false);
-
     setTimeout(() => setUploadStatus(null), 4000);
   };
 
@@ -124,6 +127,24 @@ export function SpacesView() {
     setDragOver(null);
   };
 
+  const startEditingTextContext = (spaceId: string) => {
+    const space = spaces.find((s) => s.id === spaceId);
+    setEditingTextContext(spaceId);
+    setTextContextDraft(space?.textContext || '');
+  };
+
+  const saveTextContext = (spaceId: string) => {
+    updateSpaceTextContext(spaceId, textContextDraft);
+    setEditingTextContext(null);
+    // TODO: Sync to backend
+  };
+
+  const handleGoToChat = (e: React.MouseEvent, spaceId: string) => {
+    e.stopPropagation();
+    setActiveSpace(spaceId);
+    setActiveTab('chat');
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -142,12 +163,10 @@ export function SpacesView() {
 
         {spaces.map((space) => (
           <div key={space.id}>
+            {/* Space card — clicking expands, NOT navigates */}
             <div
-              className={`space-card ${activeSpaceId === space.id ? 'space-card--active' : ''} ${dragOver === space.id ? 'space-card--dragover' : ''}`}
-              onClick={() => {
-                setActiveSpace(space.id);
-                setActiveTab('chat');
-              }}
+              className={`space-card ${activeSpaceId === space.id ? 'space-card--active' : ''} ${expandedSpace === space.id ? 'space-card--expanded' : ''} ${dragOver === space.id ? 'space-card--dragover' : ''}`}
+              onClick={() => toggleExpand(space.id)}
               onDrop={(e) => handleDrop(e, space.id)}
               onDragOver={(e) => handleDragOver(e, space.id)}
               onDragLeave={handleDragLeave}
@@ -156,7 +175,9 @@ export function SpacesView() {
               <div className="space-card__info">
                 <div className="space-card__name">{space.name}</div>
                 <div className="space-card__meta">
-                  {space.fileCount} files · {space.description || 'No description'}
+                  {space.fileCount} files
+                  {space.textContext ? ' · 📝 Context set' : ''}
+                  {space.description ? ` · ${space.description}` : ''}
                 </div>
               </div>
 
@@ -164,11 +185,15 @@ export function SpacesView() {
                 {activeSpaceId === space.id && (
                   <span className="space-card__badge">Active</span>
                 )}
+                {/* Go to Chat button */}
                 <button
                   className="title-bar__btn"
-                  onClick={(e) => toggleExpand(e, space.id)}
-                  title="Manage files"
+                  onClick={(e) => handleGoToChat(e, space.id)}
+                  title="Open Chat"
                 >
+                  <MessageSquare size={14} />
+                </button>
+                <button className="title-bar__btn" title={expandedSpace === space.id ? 'Collapse' : 'Expand'}>
                   {expandedSpace === space.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </button>
                 {spaces.length > 1 && (
@@ -183,55 +208,103 @@ export function SpacesView() {
               </div>
             </div>
 
-            {/* Expanded file management panel */}
+            {/* Expanded management panel */}
             {expandedSpace === space.id && (
               <div className="space-files" onClick={(e) => e.stopPropagation()}>
-                {/* Upload zone */}
-                <div
-                  className={`upload-zone ${dragOver === space.id ? 'upload-zone--active' : ''}`}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Upload size={18} style={{ opacity: 0.6 }} />
-                  <span style={{ fontSize: '12px', opacity: 0.7 }}>
-                    Drop files here or click to upload
-                  </span>
-                  <span style={{ fontSize: '10px', opacity: 0.4 }}>
-                    PDF, DOCX, TXT, MD, CSV, PPTX, Code
-                  </span>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept=".pdf,.docx,.txt,.md,.csv,.pptx,.py,.js,.ts,.json,.yaml,.yml,.html,.xml"
-                    style={{ display: 'none' }}
-                    onChange={(e) => handleFileUpload(space.id, e.target.files)}
-                  />
+                {/* ── Text Context Section ─────────────────────── */}
+                <div className="space-section">
+                  <div
+                    className="space-section__header"
+                    onClick={() => editingTextContext === space.id ? setEditingTextContext(null) : startEditingTextContext(space.id)}
+                  >
+                    <Type size={14} style={{ opacity: 0.6 }} />
+                    <span className="space-section__label">Space Context</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                      {space.textContext ? `${space.textContext.length} chars` : 'Not set'}
+                    </span>
+                  </div>
+
+                  {editingTextContext === space.id ? (
+                    <div className="space-context-edit">
+                      <textarea
+                        className="space-context-textarea"
+                        placeholder="Add persistent text context for this space...&#10;&#10;Example: &quot;I am a senior developer applying to FAANG companies. My stack is Python, Go, and Kubernetes. Prefer concise, technical tone.&quot;"
+                        value={textContextDraft}
+                        onChange={(e) => setTextContextDraft(e.target.value)}
+                        rows={4}
+                        autoFocus
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+                        <button className="btn-ghost btn-sm" onClick={() => setEditingTextContext(null)}>Cancel</button>
+                        <button className="btn-primary btn-sm" onClick={() => saveTextContext(space.id)}>
+                          <Save size={12} /> Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : space.textContext ? (
+                    <div
+                      className="space-context-preview"
+                      onClick={() => startEditingTextContext(space.id)}
+                    >
+                      {space.textContext.slice(0, 150)}{space.textContext.length > 150 ? '...' : ''}
+                    </div>
+                  ) : null}
                 </div>
 
-                {/* Upload status */}
-                {uploadStatus && (
-                  <div className="upload-status">
-                    {uploading && <RefreshCw size={12} className="spin" />}
-                    <span>{uploadStatus}</span>
+                {/* ── File Upload Section ──────────────────────── */}
+                <div className="space-section">
+                  <div className="space-section__header">
+                    <FileText size={14} style={{ opacity: 0.6 }} />
+                    <span className="space-section__label">Documents</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                      {(spaceFiles[space.id] || []).length} files
+                    </span>
                   </div>
-                )}
 
-                {/* File list */}
-                {(spaceFiles[space.id] || []).length > 0 ? (
-                  <div className="file-list">
-                    {spaceFiles[space.id].map((file) => (
-                      <div key={file.name} className="file-item">
-                        <FileText size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-                        <span className="file-item__name">{file.name}</span>
-                        <span className="file-item__size">{formatFileSize(file.size)}</span>
-                      </div>
-                    ))}
+                  <div
+                    className={`upload-zone ${dragOver === space.id ? 'upload-zone--active' : ''}`}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload size={18} style={{ opacity: 0.6 }} />
+                    <span style={{ fontSize: '12px', opacity: 0.7 }}>
+                      Drop files or click to upload
+                    </span>
+                    <span style={{ fontSize: '10px', opacity: 0.4 }}>
+                      PDF, DOCX, TXT, MD, CSV, PPTX, Code
+                    </span>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx,.txt,.md,.csv,.pptx,.py,.js,.ts,.json,.yaml,.yml,.html,.xml"
+                      style={{ display: 'none' }}
+                      onChange={(e) => handleFileUpload(space.id, e.target.files)}
+                    />
                   </div>
-                ) : (
-                  <div style={{ fontSize: '12px', opacity: 0.4, textAlign: 'center', padding: '8px' }}>
-                    No files uploaded yet
-                  </div>
-                )}
+
+                  {uploadStatus && (
+                    <div className="upload-status">
+                      {uploading && <RefreshCw size={12} className="spin" />}
+                      <span>{uploadStatus}</span>
+                    </div>
+                  )}
+
+                  {(spaceFiles[space.id] || []).length > 0 ? (
+                    <div className="file-list">
+                      {spaceFiles[space.id].map((file) => (
+                        <div key={file.name} className="file-item">
+                          <FileText size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
+                          <span className="file-item__name">{file.name}</span>
+                          <span className="file-item__size">{formatFileSize(file.size)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', opacity: 0.4, textAlign: 'center', padding: '6px' }}>
+                      No files uploaded yet
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -245,26 +318,19 @@ export function SpacesView() {
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
-                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>
-                  Icon
-                </label>
+                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>Icon</label>
                 <div className="emoji-grid">
                   {SPACE_EMOJIS.map((emoji) => (
                     <button
                       key={emoji}
                       className={`emoji-btn ${newIcon === emoji ? 'emoji-btn--selected' : ''}`}
                       onClick={() => setNewIcon(emoji)}
-                    >
-                      {emoji}
-                    </button>
+                    >{emoji}</button>
                   ))}
                 </div>
               </div>
-              
               <div>
-                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>
-                  Name
-                </label>
+                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>Name</label>
                 <input
                   className="input-field"
                   placeholder="e.g., Job Applications"
@@ -274,11 +340,8 @@ export function SpacesView() {
                   onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
                 />
               </div>
-              
               <div>
-                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>
-                  Description
-                </label>
+                <label className="settings-section__title" style={{ marginBottom: '6px', display: 'block' }}>Description</label>
                 <input
                   className="input-field"
                   placeholder="What is this space for?"
@@ -290,9 +353,7 @@ export function SpacesView() {
 
             <div className="modal__actions">
               <button className="btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-              <button className="btn-primary" onClick={handleCreate} disabled={!newName.trim()}>
-                Create Space
-              </button>
+              <button className="btn-primary" onClick={handleCreate} disabled={!newName.trim()}>Create Space</button>
             </div>
           </div>
         </div>

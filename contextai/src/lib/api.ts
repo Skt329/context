@@ -24,6 +24,8 @@ export async function streamChat(
   onChunk: (content: string) => void,
   onError: (error: string) => void,
   onDone: () => void,
+  textContext?: string | null,
+  images?: { data_url: string; name: string }[],
 ): Promise<void> {
   try {
     const res = await fetch(`${BASE_URL}/chat/stream`, {
@@ -33,6 +35,8 @@ export async function streamChat(
         message,
         space_id: spaceId,
         screen_context: screenContext,
+        text_context: textContext || null,
+        images: images && images.length > 0 ? images : null,
       }),
     });
 
@@ -218,6 +222,123 @@ export async function uploadFile(spaceId: string, file: File): Promise<any | nul
 export async function listFiles(spaceId: string): Promise<{ files: any[] } | null> {
   try {
     const res = await fetch(`${BASE_URL}/files/${spaceId}/files`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+
+// ─── Memory API ──────────────────────────────────────────────
+
+/** Get global memory content */
+export async function getGlobalMemory(): Promise<{ content: string } | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/global`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Update global memory content */
+export async function setGlobalMemory(content: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/global`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Get space-specific memory */
+export async function getSpaceMemory(spaceId: string): Promise<{ content: string } | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/space/${spaceId}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Update space memory */
+export async function setSpaceMemory(spaceId: string, content: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/space/${spaceId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Get user profile (procedural memory) for a space */
+export async function getUserProfile(spaceId: string): Promise<{ content: string } | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/profile/${spaceId}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Extract facts from a conversation and save to memory */
+export async function extractMemoryFromChat(
+  messages: { role: string; content: string }[],
+  spaceId: string,
+): Promise<{ facts_extracted: number } | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/memory/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, space_id: spaceId }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+
+// ─── Screen Context API ──────────────────────────────────────
+
+/** Capture screen context (UIA / clipboard / screenshot) */
+export async function captureScreenContext(): Promise<{
+  method: string;
+  text: string;
+  length: number;
+  window_title: string;
+} | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/context/capture`, { method: 'POST' });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Get a preview of available screen context */
+export async function previewScreenContext(): Promise<{
+  available: boolean;
+  method?: string;
+  preview?: string;
+  length?: number;
+} | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/context/preview`);
     if (!res.ok) return null;
     return await res.json();
   } catch {

@@ -1,88 +1,93 @@
 """Screen context router — capture text from active window, clipboard, or screenshot."""
 
-import sys
 from fastapi import APIRouter
 from pydantic import BaseModel
+
+from app.services.screen_context import (
+    capture_screen_context,
+    clipboard_monitor,
+    ScreenCapture,
+)
 
 router = APIRouter()
 
 
 class ContextResponse(BaseModel):
-    method: str  # "uia", "clipboard", "screenshot"
+    method: str  # "uia", "clipboard", "screenshot", "none"
     text: str
     length: int
+    window_title: str = ""
+    has_screenshot: bool = False
+
+
+class ClipboardToggle(BaseModel):
+    enabled: bool
 
 
 @router.post("/capture")
 async def capture_context():
     """Capture screen context using the priority waterfall."""
+    result = capture_screen_context(include_screenshot=True)
+    return ContextResponse(
+        method=result.method,
+        text=result.text,
+        length=result.length,
+        window_title=result.window_title,
+        has_screenshot=result.screenshot_b64 is not None,
+    )
 
-    # Method 1: Windows UIA (accessibility tree)
-    if sys.platform == "win32":
-        try:
-            text = _capture_via_uia()
-            if text and len(text) > 50:
-                return ContextResponse(method="uia", text=text, length=len(text))
-        except Exception:
-            pass
 
-    # Method 2: Clipboard
-    try:
-        import pyperclip
-        clip = pyperclip.paste()
-        if clip and len(clip) > 50:
-            return ContextResponse(method="clipboard", text=clip, length=len(clip))
-    except Exception:
-        pass
-
-    # Method 3: Screenshot (placeholder — requires vision API)
-    return ContextResponse(method="none", text="", length=0)
+@router.post("/capture/screenshot")
+async def capture_screenshot_raw():
+    """Capture a screenshot and return the base64 data URL for vision models."""
+    result = capture_screen_context(include_screenshot=True)
+    if result.screenshot_b64:
+        return {
+            "available": True,
+            "data_url": result.screenshot_b64,
+            "window_title": result.window_title,
+        }
+    # If UIA/clipboard worked, return text instead
+    if result.text:
+        return {
+            "available": True,
+            "text": result.text,
+            "method": result.method,
+            "window_title": result.window_title,
+        }
+    return {"available": False}
 
 
 @router.get("/preview")
 async def preview_context():
     """Get a preview of what context would be captured."""
-    result = await capture_context()
+    result = capture_screen_context(include_screenshot=False)
     if result.length > 0:
         preview = result.text[:200] + ("..." if len(result.text) > 200 else "")
-        return {"available": True, "method": result.method, "preview": preview, "length": result.length}
+        return {
+            "available": True,
+            "method": result.method,
+            "preview": preview,
+            "length": result.length,
+            "window_title": result.window_title,
+        }
     return {"available": False}
 
 
-def _capture_via_uia() -> str:
-    """Capture text from the active window using Windows UI Automation API."""
-    try:
-        import uiautomation as auto
-
-        focused = auto.GetFocusedControl()
-        if not focused:
-            return ""
-
-        root = focused.GetTopLevelControl()
-        if not root:
-            return ""
-
-        texts = []
-        _walk_tree(root, texts, depth=0, max_depth=8)
-        return "\n".join(texts)
-    except ImportError:
-        return ""
+@router.post("/clipboard/toggle")
+async def toggle_clipboard_monitor(body: ClipboardToggle):
+    """Enable or disable clipboard monitoring."""
+    if body.enabled:
+        clipboard_monitor.enable()
+    else:
+        clipboard_monitor.disable()
+    return {"enabled": clipboard_monitor.enabled}
 
 
-def _walk_tree(control, texts: list, depth: int, max_depth: int):
-    """Recursively walk the UIA tree to collect text content."""
-    if depth > max_depth:
-        return
-
-    try:
-        name = control.Name
-        if name and len(name.strip()) > 2:
-            texts.append(name.strip())
-    except Exception:
-        pass
-
-    try:
-        for child in control.GetChildren():
-            _walk_tree(child, texts, depth + 1, max_depth)
-    except Exception:
-        pass
+@router.get("/clipboard/history")
+async def get_clipboard_history():
+    """Get recent clipboard entries (when monitoring is enabled)."""
+    return {
+        "enabled": clipboard_monitor.enabled,
+        "entries": clipboard_monitor.get_recent(),
+    }

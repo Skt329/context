@@ -974,3 +974,202 @@ html, body, #root {
 .spin {
   animation: spin 1s linear infinite;
 }
+
+/* ─── Chat Header ──────────────────────────────────────────── */
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.chat-header__space {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-header__icon {
+  font-size: 16px;
+}
+
+.chat-header__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Attachment Strip ─────────────────────────────────────── */
+
+.attachment-strip {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.attachment-chip__thumb {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.attachment-chip__name {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip__remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  transition: var(--transition-fast);
+}
+
+.attachment-chip__remove:hover {
+  color: var(--error);
+}
+
+/* ─── Message Attachments ─────────────────────────────────── */
+
+.message__attachment-img {
+  max-width: 200px;
+  max-height: 150px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  object-fit: cover;
+}
+
+.message__attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--accent-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-accent);
+  margin-bottom: 4px;
+}
+
+/* ─── Space Management Panel ──────────────────────────────── */
+
+.space-card--expanded {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.space-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.space-section__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+}
+
+.space-section__header:hover {
+  background: var(--bg-hover);
+}
+
+.space-section__label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.space-context-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.space-context-textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 140px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: var(--transition-fast);
+}
+
+.space-context-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.space-context-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.space-context-preview {
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.space-context-preview:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+
+/* ─── Small Button Variant ────────────────────────────────── */
+
+.btn-sm {
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+  gap: 4px;
+}

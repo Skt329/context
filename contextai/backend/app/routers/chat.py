@@ -21,11 +21,19 @@ DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 
+class ChatImage(BaseModel):
+    """Base64-encoded image from chat attachment."""
+    data_url: str  # e.g. "data:image/png;base64,iVBOR..."
+    name: str | None = None
+
+
 class ChatRequest(BaseModel):
     message: str
     space_id: str
     screen_context: str | None = None
     conversation_id: str | None = None
+    text_context: str | None = None
+    images: list[ChatImage] | None = None  # Multi-modal image attachments
 
 
 class RateRequest(BaseModel):
@@ -77,9 +85,14 @@ def _load_user_profile(space_id: str) -> str:
     return ""
 
 
-def _build_system_prompt(space_id: str, screen_context: str | None, rag_context: str | None) -> str:
+def _build_system_prompt(
+    space_id: str,
+    screen_context: str | None,
+    rag_context: str | None,
+    text_context: str | None = None,
+) -> str:
     """Build the system prompt with all context layers."""
-    user_profile = _load_user_profile(space_id)
+    from app.services.memory_service import build_memory_context
 
     parts = [
         "You are ContextAI, a personal AI assistant with deep contextual awareness.",
@@ -87,8 +100,13 @@ def _build_system_prompt(space_id: str, screen_context: str | None, rag_context:
         "Be concise, helpful, and proactive. Format responses with markdown when appropriate.",
     ]
 
-    if user_profile.strip():
-        parts.append(f"\n## User Profile (Procedural Memory)\n{user_profile}")
+    # Inject 4-layer memory (global + space + user profile)
+    memory_ctx = build_memory_context(space_id)
+    if memory_ctx.strip():
+        parts.append(f"\n{memory_ctx}")
+
+    if text_context and text_context.strip():
+        parts.append(f"\n## Space Context (User-Defined)\nThe user has provided the following persistent context for this space:\n{text_context.strip()}")
 
     if rag_context:
         parts.append(f"\n## Retrieved Context (from user's documents)\n{rag_context}")
@@ -97,6 +115,31 @@ def _build_system_prompt(space_id: str, screen_context: str | None, rag_context:
         parts.append(f"\n## Current Screen Context\nThe user's active window contains:\n{screen_context[:2000]}")
 
     return "\n\n".join(parts)
+
+
+def _build_user_content(message: str, images: list[ChatImage] | None = None):
+    """Build user message content — plain string or multi-modal content blocks.
+
+    When images are attached, returns OpenAI-format content array:
+    [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:..."}}]
+
+    LiteLLM automatically translates this for all providers (Anthropic, Gemini, Ollama llava, etc.).
+    """
+    if not images:
+        return message
+
+    content = []
+
+    if message.strip():
+        content.append({"type": "text", "text": message})
+
+    for img in images:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": img.data_url},
+        })
+
+    return content
 
 
 async def _stream_litellm(messages: list[dict], provider_id: str, config: dict) -> AsyncGenerator[str, None]:
@@ -165,12 +208,13 @@ async def chat_stream(request: ChatRequest):
         logger.warning(f"RAG retrieval failed (non-fatal): {e}")
 
     # 3. Build system prompt
-    system_prompt = _build_system_prompt(request.space_id, request.screen_context, rag_context)
+    system_prompt = _build_system_prompt(request.space_id, request.screen_context, rag_context, request.text_context)
 
-    # 4. Build message list
+    # 4. Build message list (multi-modal if images present)
+    user_content = _build_user_content(request.message, request.images)
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": request.message},
+        {"role": "user", "content": user_content},
     ]
 
     # 5. Stream response
