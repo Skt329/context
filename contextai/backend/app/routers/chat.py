@@ -1,16 +1,29 @@
-"""Chat router — streaming AI responses with RAG context injection."""
+"""Chat router — real LLM streaming via LiteLLM with RAG context injection."""
 
-from fastapi import APIRouter
+import json
+import os
+import uuid
+import logging
+from datetime import datetime
+from typing import AsyncGenerator
+
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+logger = logging.getLogger("contextai.chat")
+
 router = APIRouter()
+
+DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 
 class ChatRequest(BaseModel):
     message: str
     space_id: str
     screen_context: str | None = None
+    conversation_id: str | None = None
 
 
 class RateRequest(BaseModel):
@@ -18,25 +31,149 @@ class RateRequest(BaseModel):
     rating: int  # 1-5
 
 
+def _load_settings() -> dict:
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r") as f:
+            return json.load(f)
+    return {"providers": {}}
+
+
+def _get_active_provider() -> tuple[str, dict] | None:
+    """Find the first enabled provider with a valid API key."""
+    settings = _load_settings()
+    providers = settings.get("providers", {})
+
+    for pid, config in providers.items():
+        if config.get("enabled") and (config.get("api_key") or pid == "ollama"):
+            return pid, config
+
+    return None
+
+
+def _build_litellm_model(provider_id: str, config: dict) -> str:
+    """Convert provider ID + config into a LiteLLM model string."""
+    model = config.get("model", "")
+
+    model_map = {
+        "openai": model,  # e.g., "gpt-4o"
+        "anthropic": model,  # e.g., "claude-sonnet-4-5-20250514"
+        "gemini": f"gemini/{model}",
+        "mistral": f"mistral/{model}",
+        "deepseek": f"deepseek/{model}",
+        "azure": f"azure/{model}",
+        "ollama": f"ollama/{model}",
+    }
+    return model_map.get(provider_id, model)
+
+
+def _load_user_profile(space_id: str) -> str:
+    """Load the user profile for procedural memory context."""
+    profile_path = os.path.join(DATA_DIR, "spaces", space_id, "user_profile.md")
+    if os.path.exists(profile_path):
+        with open(profile_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    return ""
+
+
+def _build_system_prompt(space_id: str, screen_context: str | None, rag_context: str | None) -> str:
+    """Build the system prompt with all context layers."""
+    user_profile = _load_user_profile(space_id)
+
+    parts = [
+        "You are ContextAI, a personal AI assistant with deep contextual awareness.",
+        "You help users with tasks using their uploaded documents, screen context, and memory.",
+        "Be concise, helpful, and proactive. Format responses with markdown when appropriate.",
+    ]
+
+    if user_profile.strip():
+        parts.append(f"\n## User Profile (Procedural Memory)\n{user_profile}")
+
+    if rag_context:
+        parts.append(f"\n## Retrieved Context (from user's documents)\n{rag_context}")
+
+    if screen_context:
+        parts.append(f"\n## Current Screen Context\nThe user's active window contains:\n{screen_context[:2000]}")
+
+    return "\n\n".join(parts)
+
+
+async def _stream_litellm(messages: list[dict], provider_id: str, config: dict) -> AsyncGenerator[str, None]:
+    """Stream response chunks from LiteLLM."""
+    import litellm
+
+    model = _build_litellm_model(provider_id, config)
+    api_key = config.get("api_key")
+    api_base = config.get("api_base")
+
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": 4096,
+    }
+
+    if api_key and provider_id != "ollama":
+        kwargs["api_key"] = api_key
+    if api_base:
+        kwargs["api_base"] = api_base
+
+    try:
+        response = await litellm.acompletion(**kwargs)
+        async for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                # SSE format
+                yield f"data: {json.dumps({'content': delta.content})}\n\n"
+    except Exception as e:
+        logger.error(f"LiteLLM streaming error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
 @router.post("/stream")
 async def chat_stream(request: ChatRequest):
     """Stream an AI response with RAG context from the active Space."""
-    
-    async def generate():
-        # TODO: Wire up LiteLLM + RAG pipeline
-        # 1. Retrieve relevant chunks from Space's ChromaDB + BM25
-        # 2. Rerank with FlashRank
-        # 3. Build system prompt with user_profile.md + retrieved chunks
-        # 4. Stream response via LiteLLM
-        response = f"[ContextAI] Received: '{request.message}' in space '{request.space_id}'"
-        for char in response:
-            yield f"data: {char}\n\n"
-    
-    return StreamingResponse(generate(), media_type="text/event-stream")
+
+    # 1. Check for an enabled provider
+    provider = _get_active_provider()
+    if not provider:
+        # Return a helpful error as SSE
+        async def no_provider():
+            yield f"data: {json.dumps({'content': '⚠️ No LLM provider is configured. Go to Settings → enable a provider and add your API key.'})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(no_provider(), media_type="text/event-stream")
+
+    provider_id, config = provider
+
+    # 2. TODO: Retrieve RAG context from ChromaDB + BM25
+    rag_context = None  # Will be implemented when RAG pipeline is wired
+
+    # 3. Build system prompt
+    system_prompt = _build_system_prompt(request.space_id, request.screen_context, rag_context)
+
+    # 4. Build message list
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": request.message},
+    ]
+
+    # 5. Stream response
+    return StreamingResponse(
+        _stream_litellm(messages, provider_id, config),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Provider": provider_id,
+            "X-Model": config.get("model", "unknown"),
+        },
+    )
 
 
 @router.post("/rate")
 async def rate_message(request: RateRequest):
     """Rate a message to update procedural memory."""
-    # TODO: Update user_profile.md based on rating
+    # TODO: Parse response quality and update user_profile.md
     return {"status": "ok", "message_id": request.message_id, "rating": request.rating}

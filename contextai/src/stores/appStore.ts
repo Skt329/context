@@ -27,6 +27,7 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   color: string;
+  availableModels?: string[]; // for providers like Ollama with detected models
 }
 
 export interface HistoryItem {
@@ -62,6 +63,8 @@ interface AppState {
   providers: ProviderConfig[];
   toggleProvider: (id: string) => void;
   updateProviderKey: (id: string, key: string) => void;
+  updateProviderModel: (id: string, model: string) => void;
+  setOllamaModels: (models: string[]) => void;
   
   // History
   history: HistoryItem[];
@@ -76,13 +79,13 @@ interface AppState {
 }
 
 const defaultProviders: ProviderConfig[] = [
+  { id: 'ollama', name: 'Ollama (Local)', enabled: true, apiKey: '', model: '', color: '#ffffff', availableModels: [] },
   { id: 'openai', name: 'OpenAI', enabled: false, apiKey: '', model: 'gpt-4o', color: '#10a37f' },
   { id: 'anthropic', name: 'Anthropic', enabled: false, apiKey: '', model: 'claude-sonnet-4-5-20250514', color: '#d4a574' },
   { id: 'gemini', name: 'Google Gemini', enabled: false, apiKey: '', model: 'gemini-2.0-flash', color: '#4285f4' },
   { id: 'mistral', name: 'Mistral', enabled: false, apiKey: '', model: 'mistral-large-latest', color: '#ff7000' },
   { id: 'deepseek', name: 'DeepSeek', enabled: false, apiKey: '', model: 'deepseek-chat', color: '#0066ff' },
   { id: 'azure', name: 'Azure OpenAI', enabled: false, apiKey: '', model: 'gpt-4o', color: '#0078d4' },
-  { id: 'ollama', name: 'Ollama (Local)', enabled: false, apiKey: '', model: 'llama3', color: '#ffffff' },
 ];
 
 const defaultSpaces: Space[] = [
@@ -125,6 +128,20 @@ export const useAppStore = create<AppState>((set) => ({
   })),
   updateProviderKey: (id, key) => set((state) => ({
     providers: state.providers.map((p) => p.id === id ? { ...p, apiKey: key } : p),
+  })),
+  updateProviderModel: (id, model) => set((state) => ({
+    providers: state.providers.map((p) => p.id === id ? { ...p, model } : p),
+  })),
+  setOllamaModels: (models) => set((state) => ({
+    providers: state.providers.map((p) => {
+      if (p.id !== 'ollama') return p;
+      const currentModelValid = models.includes(p.model);
+      return {
+        ...p,
+        availableModels: models,
+        model: currentModelValid ? p.model : (models[0] || ''),
+      };
+    }),
   })),
   
   history: [],
