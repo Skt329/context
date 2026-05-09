@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import chat, spaces, files, settings, context, memory, conversations
+from app.routers import chat, spaces, files, settings, context, memory, conversations, attachments
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -28,6 +28,7 @@ def ensure_data_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, "spaces"), exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, "conversations"), exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "attachments"), exist_ok=True)
     if not os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "w") as f:
             json.dump({"providers": {}, "preferences": {}}, f, indent=2)
@@ -97,6 +98,7 @@ app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(context.router, prefix="/api/context", tags=["Context"])
 app.include_router(memory.router, prefix="/api/memory", tags=["Memory"])
 app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
+app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachments"])
 
 
 @app.get("/api/health")

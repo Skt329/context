@@ -29,7 +29,8 @@ export interface ChatAttachment {
   name: string;
   type: 'file' | 'image';
   size: number;
-  dataUrl?: string;
+  dataUrl?: string; // Ephemeral: used for preview before upload, stripped on persist
+  url?: string; // Persistent: backend-served URL after upload (/api/attachments/{filename})
   indexed?: boolean; // Whether the file was indexed into RAG
 }
 
@@ -191,8 +192,8 @@ function debouncedSyncConversation(convoId: string, delayMs = 1500) {
         type: a.type,
         size: a.size,
         indexed: a.indexed,
-        // Strip base64 dataUrls to avoid bloating backend storage
-        // TODO: Phase 4 will save images to disk and store URLs instead
+        url: a.url, // Persist backend-served URL
+        // dataUrl intentionally stripped — base64 is NOT persisted to backend
       })),
     }));
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image } from 'lucide-react';
 import { useAppStore, type ChatAttachment } from '../stores/appStore';
-import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat } from '../lib/api';
+import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl } from '../lib/api';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 export function ChatView() {
@@ -110,6 +110,8 @@ export function ChatView() {
 
     // 1. Upload attached files to the active space for indexing
     const processedAttachments: ChatAttachment[] = [];
+    // Keep original base64 data for the LLM vision call (not stored in conversation)
+    const imageDataUrls = new Map<string, string>();
     if (attachments.length > 0 && backendReady) {
       setUploadingFiles(true);
       for (const att of attachments) {
@@ -126,6 +128,28 @@ export function ChatView() {
             size: att.size,
             indexed: result?.indexing?.status === 'indexed',
           });
+        } else if (att.type === 'image' && att.dataUrl) {
+          // Preserve original base64 for the LLM call
+          imageDataUrls.set(displayName, att.dataUrl);
+          // Upload image to backend attachment storage — replaces base64 with URL
+          const uploaded = await uploadAttachment(att.dataUrl, displayName);
+          if (uploaded) {
+            processedAttachments.push({
+              name: displayName,
+              type: att.type,
+              size: uploaded.size,
+              url: uploaded.url,
+              // dataUrl intentionally omitted — no longer stored in conversation JSON
+            });
+          } else {
+            // Fallback: keep dataUrl if upload failed (offline etc.)
+            processedAttachments.push({
+              name: displayName,
+              type: att.type,
+              size: att.size,
+              dataUrl: att.dataUrl,
+            });
+          }
         } else {
           processedAttachments.push({
             name: displayName,
@@ -175,10 +199,15 @@ export function ChatView() {
     addMessage(assistantMsg);
 
     if (backendReady) {
-      // Extract image attachments for multi-modal vision
+      // Build image payload for multi-modal LLM vision.
+      // Use the original base64 dataUrl (kept in memory, NOT persisted),
+      // because the LLM API requires data: URIs, not HTTP URLs.
       const imagePayload = processedAttachments
-        .filter((a) => a.type === 'image' && a.dataUrl)
-        .map((a) => ({ data_url: a.dataUrl!, name: a.name }));
+        .filter((a) => a.type === 'image' && (imageDataUrls.has(a.name) || a.dataUrl))
+        .map((a) => ({
+          data_url: imageDataUrls.get(a.name) || a.dataUrl!,
+          name: a.name,
+        }));
 
       // Build conversation history from all prior messages (exclude current)
       const conversationHistory = messages.map((m) => ({
@@ -329,8 +358,8 @@ export function ChatView() {
             {messages.map((msg) => (
               <div key={msg.id} className={`message message--${msg.role}`}>
                 <div className="message__bubble">
-                  {msg.attachments?.filter((a) => a.type === 'image' && a.dataUrl).map((a, i) => (
-                    <img key={i} src={a.dataUrl} alt={a.name} className="message__attachment-img" />
+                  {msg.attachments?.filter((a) => a.type === 'image' && (a.dataUrl || a.url)).map((a, i) => (
+                    <img key={i} src={a.url ? attachmentUrl(a.url) : a.dataUrl} alt={a.name} className="message__attachment-img" />
                   ))}
                   {msg.attachments?.filter((a) => a.type === 'file').map((a, i) => (
                     <div key={i} className="message__attachment-chip">

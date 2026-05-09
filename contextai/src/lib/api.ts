@@ -487,3 +487,58 @@ export async function getProviderConfigs(): Promise<Record<string, unknown> | nu
   }
 }
 
+
+// ─── Attachments API ─────────────────────────────────────────
+
+export interface AttachmentResult {
+  id: string;
+  filename: string;
+  url: string; // relative: /api/attachments/{filename}
+  mime_type: string;
+  size: number;
+  original_name?: string;
+}
+
+/** Upload a single base64 image attachment to backend storage */
+export async function uploadAttachment(
+  dataUrl: string,
+  name?: string,
+): Promise<AttachmentResult | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/attachments/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data_url: dataUrl, name: name || null }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Upload multiple base64 image attachments in one request */
+export async function uploadAttachmentsBatch(
+  items: { data_url: string; name?: string }[],
+): Promise<AttachmentResult[]> {
+  try {
+    const res = await fetch(`${BASE_URL}/attachments/upload/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(items.map((i) => ({ data_url: i.data_url, name: i.name || null }))),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.attachments || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Convert a relative attachment path to a full backend URL */
+export function attachmentUrl(relativeUrl: string): string {
+  if (relativeUrl.startsWith('http')) return relativeUrl;
+  if (relativeUrl.startsWith('data:')) return relativeUrl;
+  // relativeUrl is like "/api/attachments/{filename}"
+  return `http://localhost:8742${relativeUrl}`;
+}
