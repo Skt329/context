@@ -79,6 +79,19 @@ CREATE TRIGGER IF NOT EXISTS conversations_fts_delete AFTER DELETE ON conversati
     INSERT INTO conversations_fts(conversations_fts, rowid, title, messages_text)
     VALUES ('delete', old.rowid, old.title, old.messages);
 END;
+
+-- Error log for unhandled exceptions (Task 39)
+CREATE TABLE IF NOT EXISTS error_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id    TEXT NOT NULL DEFAULT '',
+    method        TEXT NOT NULL DEFAULT '',
+    path          TEXT NOT NULL DEFAULT '',
+    error_type    TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    traceback     TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log(created_at DESC);
 """
 
 

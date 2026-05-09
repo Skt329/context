@@ -9,13 +9,19 @@ import json
 import logging
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import chat, spaces, files, settings, context, memory, conversations, attachments
+from app.middleware import CorrelationMiddleware, ErrorReportingMiddleware
+from app.tasks import task_queue
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s | %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 logger = logging.getLogger("contextai")
 
 # Data directory
@@ -70,7 +76,15 @@ async def lifespan(app: FastAPI):
     migrate_from_legacy()
 
     logger.info(f"ContextAI backend started — data dir: {DATA_DIR}")
+
+    # Start background task queue
+    await task_queue.start()
+    logger.info("Background task queue started")
+
     yield
+
+    # Shutdown
+    await task_queue.stop()
     logger.info("ContextAI backend shutting down")
 
 
@@ -96,6 +110,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request tracing and error reporting middleware
+app.add_middleware(CorrelationMiddleware)
+app.add_middleware(ErrorReportingMiddleware)
+
 # Mount routers
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(spaces.router, prefix="/api/spaces", tags=["Spaces"])
@@ -109,7 +127,56 @@ app.include_router(attachments.router, prefix="/api/attachments", tags=["Attachm
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0", "data_dir": DATA_DIR}
+    return {
+        "status": "ok",
+        "version": "0.2.0",
+        "data_dir": DATA_DIR,
+        "pending_tasks": task_queue.pending_count,
+    }
+
+
+@app.get("/api/debug/errors")
+async def list_errors(limit: int = Query(20, le=100)):
+    """List recent unhandled errors from the error_log table."""
+    from app.db import get_db
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM error_log ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return {
+            "errors": [
+                {
+                    "id": r["id"],
+                    "request_id": r["request_id"],
+                    "method": r["method"],
+                    "path": r["path"],
+                    "error_type": r["error_type"],
+                    "error_message": r["error_message"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/tasks")
+async def list_tasks():
+    """List background task statuses."""
+    return {"tasks": task_queue.list_tasks()}
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """Get status of a specific background task."""
+    status = task_queue.get_status(task_id)
+    if status is None:
+        return {"status": "not_found"}
+    return {"task_id": task_id, **status}
 
 
 def main():

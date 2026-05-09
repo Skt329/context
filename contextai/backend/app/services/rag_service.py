@@ -321,12 +321,38 @@ class SpaceIndex:
         corpus_tokens = bm25s.tokenize(texts, stemmer=None)
         self._bm25 = bm25s.BM25()
         self._bm25.index(corpus_tokens)
+
+        # Persist to disk for fast cold starts
+        self._save_bm25()
         logger.info(f"Rebuilt BM25 index: {len(texts)} documents")
 
+    def _save_bm25(self):
+        """Persist BM25 index to disk."""
+        if self._bm25 and self._bm25_corpus:
+            try:
+                self._bm25.save(self.bm25_dir)
+                # Also save corpus list for rehydration
+                corpus_file = os.path.join(self.bm25_dir, "corpus.json")
+                with open(corpus_file, "w", encoding="utf-8") as f:
+                    json.dump(self._bm25_corpus, f)
+                logger.debug(f"BM25 index saved to {self.bm25_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to save BM25 index: {e}")
+
     def _load_bm25(self):
-        """Try to load BM25 index from saved chunks."""
-        # BM25 is rebuilt from chunks metadata, so just mark as needing rebuild
-        pass
+        """Load BM25 index from disk if available (fast cold start)."""
+        index_file = os.path.join(self.bm25_dir, "data.index.csc.npy")
+        corpus_file = os.path.join(self.bm25_dir, "corpus.json")
+        if os.path.exists(index_file):
+            try:
+                self._bm25 = bm25s.BM25.load(self.bm25_dir)
+                if os.path.exists(corpus_file):
+                    with open(corpus_file, "r", encoding="utf-8") as f:
+                        self._bm25_corpus = json.load(f)
+                logger.info(f"Loaded persisted BM25 index from {self.bm25_dir}")
+            except Exception as e:
+                logger.warning(f"BM25 load failed, will rebuild from chunks: {e}")
+                self._bm25 = None
 
     # ── Persistence ───────────────────────────────────────────────
 

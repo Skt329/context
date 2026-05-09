@@ -2,10 +2,12 @@
 
 import os
 import json
+import uuid
 import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.indexing import index_file, remove_file_from_index, reindex_space, search_space
+from app.tasks import task_queue
 
 logger = logging.getLogger("contextai.files")
 DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai", "spaces")
@@ -25,7 +27,7 @@ ALLOWED_EXTENSIONS = {
 
 @router.post("/{space_id}/upload")
 async def upload_file_endpoint(space_id: str, file: UploadFile = File(...)):
-    """Upload a file to a Space, parse, chunk, and index it."""
+    """Upload a file to a Space. Indexing runs in background."""
     # Validate file extension
     filename = file.filename or "unnamed"
     ext = os.path.splitext(filename)[1].lower()
@@ -49,17 +51,14 @@ async def upload_file_endpoint(space_id: str, file: UploadFile = File(...)):
             detail=f"File too large ({len(content) // 1024 // 1024} MB). Maximum allowed: {MAX_FILE_SIZE // 1024 // 1024} MB",
         )
 
-    # Save file
+    # Save file immediately (non-blocking)
     file_path = os.path.join(raw_dir, filename)
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Index into RAG pipeline
-    try:
-        index_result = await index_file(space_id, file_path)
-    except Exception as e:
-        logger.error(f"Indexing failed for {file.filename}: {e}")
-        index_result = {"status": "error", "error": str(e)}
+    # Enqueue indexing as a background task
+    task_id = str(uuid.uuid4())
+    await task_queue.enqueue(task_id, index_file(space_id, file_path))
 
     # Update meta file count
     _update_meta_counts(space_dir)
@@ -69,7 +68,7 @@ async def upload_file_endpoint(space_id: str, file: UploadFile = File(...)):
         "filename": file.filename,
         "size": len(content),
         "space_id": space_id,
-        "indexing": index_result,
+        "indexing": {"status": "queued", "task_id": task_id},
     }
 
 

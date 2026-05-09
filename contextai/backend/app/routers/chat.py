@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.indexing import search_space
+from app.services.tools import get_tool_definitions, execute_tool
 
 logger = logging.getLogger("contextai.chat")
 
@@ -251,6 +252,7 @@ async def _stream_litellm(
         "stream": True,
         "max_tokens": 4096,
         "stream_options": {"include_usage": True},
+        "tools": get_tool_definitions(),
     }
 
     if api_key and provider_id != "ollama":
@@ -417,7 +419,59 @@ async def chat_stream(request: ChatRequest):
 
     messages.append({"role": "user", "content": user_content})
 
-    # 4. Stream with failover
+    # 4. Tool execution loop (max 3 rounds)
+    tool_rounds = 0
+    max_tool_rounds = 3
+
+    while tool_rounds < max_tool_rounds:
+        # Try a non-streaming call to check for tool_calls
+        provider = _get_active_provider()
+        if not provider:
+            break
+
+        try:
+            import litellm
+            pid, cfg = provider
+            model_str = _build_litellm_model(pid, cfg)
+            non_stream_kwargs = {
+                "model": model_str,
+                "messages": messages,
+                "max_tokens": 4096,
+                "tools": get_tool_definitions(),
+            }
+            if cfg.get("api_key") and pid != "ollama":
+                non_stream_kwargs["api_key"] = cfg.get("api_key")
+            if cfg.get("api_base"):
+                non_stream_kwargs["api_base"] = cfg.get("api_base")
+
+            response = await litellm.acompletion(**non_stream_kwargs)
+            choice = response.choices[0]
+
+            if choice.message.tool_calls:
+                # Append the assistant's tool call message
+                messages.append(choice.message.model_dump())
+
+                # Execute each tool call and add results
+                for tc in choice.message.tool_calls:
+                    fn_name = tc.function.name
+                    fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                    logger.info(f"Tool call: {fn_name}({fn_args})")
+                    result = await execute_tool(fn_name, fn_args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+                tool_rounds += 1
+                continue  # Loop back for another LLM call with tool results
+            else:
+                break  # No tool calls, proceed to streaming
+
+        except Exception as e:
+            logger.warning(f"Tool execution round failed: {e}")
+            break
+
+    # 5. Stream final response with failover
     provider = _get_active_provider()
     headers = {
         "Cache-Control": "no-cache",
