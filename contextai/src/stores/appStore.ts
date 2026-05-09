@@ -91,8 +91,14 @@ interface AppState {
   // Chat actions
   isGenerating: boolean;
   setIsGenerating: (v: boolean) => void;
+  abortController: AbortController | null;
+  setAbortController: (ctrl: AbortController | null) => void;
   addMessage: (msg: Message) => void;
   updateMessage: (id: string, content: string) => void;
+  deleteMessage: (messageId: string) => void;
+  regenerateLastResponse: () => void;
+  stopGeneration: () => void;
+  setConversationTitle: (convoId: string, title: string) => void;
   newChat: () => void;
   loadConversation: (conversationId: string) => void;
   deleteConversation: (conversationId: string) => void;
@@ -325,6 +331,16 @@ export const useAppStore = create<AppState>()(
         // ── Chat Actions ──
         isGenerating: false,
         setIsGenerating: (v) => set({ isGenerating: v }),
+        abortController: null,
+        setAbortController: (ctrl) => set({ abortController: ctrl }),
+
+        stopGeneration: () => {
+          const state = get();
+          if (state.abortController) {
+            state.abortController.abort();
+            set({ abortController: null, isGenerating: false });
+          }
+        },
 
         addMessage: (msg) => {
           const state = get();
@@ -368,6 +384,59 @@ export const useAppStore = create<AppState>()(
 
           // Debounced write-through — streaming will batch many updates
           debouncedSyncConversation(convoId, 2000);
+        },
+
+        deleteMessage: (messageId) => {
+          const state = get();
+          const convoId = state.activeConversationId;
+          if (!convoId) return;
+
+          set((state) => ({
+            conversations: state.conversations.map((c) => {
+              if (c.id !== convoId) return c;
+              return {
+                ...c,
+                messages: c.messages.filter((m) => m.id !== messageId),
+                updatedAt: new Date().toISOString(),
+              };
+            }),
+          }));
+
+          debouncedSyncConversation(convoId);
+        },
+
+        regenerateLastResponse: () => {
+          const state = get();
+          const convoId = state.activeConversationId;
+          if (!convoId || state.isGenerating) return;
+
+          const convo = state.conversations.find((c) => c.id === convoId);
+          if (!convo || convo.messages.length < 2) return;
+
+          // Remove the last assistant message
+          const lastMsg = convo.messages[convo.messages.length - 1];
+          if (lastMsg.role !== 'assistant') return;
+
+          set((s) => ({
+            conversations: s.conversations.map((c) => {
+              if (c.id !== convoId) return c;
+              return {
+                ...c,
+                messages: c.messages.filter((m) => m.id !== lastMsg.id),
+                updatedAt: new Date().toISOString(),
+              };
+            }),
+          }));
+          // ChatView will detect the regenerate trigger via a callback
+        },
+
+        setConversationTitle: (convoId, title) => {
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.id === convoId ? { ...c, title, updatedAt: new Date().toISOString() } : c
+            ),
+          }));
+          debouncedSyncConversation(convoId);
         },
 
         newChat: () => {

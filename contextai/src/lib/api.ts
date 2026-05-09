@@ -27,6 +27,7 @@ export async function streamChat(
   textContext?: string | null,
   images?: { data_url: string; name: string }[],
   history?: { role: string; content: string }[],
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
     const res = await fetch(`${BASE_URL}/chat/stream`, {
@@ -40,6 +41,7 @@ export async function streamChat(
         images: images && images.length > 0 ? images : null,
         history: history && history.length > 0 ? history : null,
       }),
+      signal,
     });
 
     if (!res.ok) {
@@ -89,8 +91,45 @@ export async function streamChat(
     }
     onDone();
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      onDone();
+      return;
+    }
     onError(err instanceof Error ? err.message : 'Connection failed');
     onDone();
+  }
+}
+
+/** Generate an auto-title for a conversation using a fast LLM call */
+export async function generateTitle(
+  message: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/chat/generate-title`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.title || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Rate a message for procedural memory */
+export async function rateMessage(messageId: string, rating: number): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/chat/rate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message_id: messageId, rating }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

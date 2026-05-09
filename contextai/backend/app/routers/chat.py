@@ -302,3 +302,44 @@ async def rate_message(request: RateRequest):
     """Rate a message to update procedural memory."""
     # TODO: Parse response quality and update user_profile.md
     return {"status": "ok", "message_id": request.message_id, "rating": request.rating}
+
+
+class TitleRequest(BaseModel):
+    message: str
+
+
+@router.post("/generate-title")
+async def generate_title(request: TitleRequest):
+    """Generate a short title for a conversation from the first user message."""
+    provider = _get_active_provider()
+    if not provider:
+        # Fallback: truncate the message
+        return {"title": request.message[:40].strip() + ("..." if len(request.message) > 40 else "")}
+
+    provider_id, config = provider
+    model = _build_litellm_model(provider_id, config)
+
+    try:
+        import litellm
+        api_key = config.get("api_key")
+        api_base = config.get("api_base")
+
+        kwargs = {"model": model, "api_key": api_key, "max_tokens": 20, "temperature": 0.3}
+        if api_base:
+            kwargs["api_base"] = api_base
+
+        response = await litellm.acompletion(
+            **kwargs,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Generate a short, descriptive title (3-6 words max) for a conversation that starts with the user message below. Reply with ONLY the title, no quotes, no explanation.",
+                },
+                {"role": "user", "content": request.message[:500]},
+            ],
+        )
+        title = response.choices[0].message.content.strip().strip('"').strip("'")
+        return {"title": title[:60]}
+    except Exception as e:
+        logger.warning(f"Title generation failed: {e}")
+        return {"title": request.message[:40].strip() + ("..." if len(request.message) > 40 else "")}

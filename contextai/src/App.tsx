@@ -6,14 +6,19 @@ import { ChatView } from './components/ChatView';
 import { SpacesView } from './components/SpacesView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
+import { ToastContainer } from './components/Toast';
 import { useAppStore } from './stores/appStore';
 import { checkHealth, fetchOllamaModels, updateProvider } from './lib/api';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 function App() {
   const activeTab = useAppStore((s) => s.activeTab);
   const setBackendReady = useAppStore((s) => s.setBackendReady);
   const setOllamaModels = useAppStore((s) => s.setOllamaModels);
   const hydrateFromBackend = useAppStore((s) => s.hydrateFromBackend);
+
+  // Global keyboard shortcuts
+  useKeyboardShortcuts();
 
   // Guard against StrictMode double-mount (Mi2)
   const pollRef = useRef(false);
@@ -87,8 +92,10 @@ function App() {
       <div className="content">
         {renderContent()}
       </div>
+      <ToastContainer />
     </div>
   );
 }
 
 export default App;
+

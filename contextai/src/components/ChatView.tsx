@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Square, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image, Download } from 'lucide-react';
 import { useAppStore, type ChatAttachment } from '../stores/appStore';
-import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl } from '../lib/api';
+import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl, generateTitle, rateMessage } from '../lib/api';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { MessageActions } from './MessageActions';
+import { toast } from './Toast';
 
 export function ChatView() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
@@ -10,6 +12,10 @@ export function ChatView() {
   const isGenerating = useAppStore((s) => s.isGenerating);
   const addMessage = useAppStore((s) => s.addMessage);
   const setIsGenerating = useAppStore((s) => s.setIsGenerating);
+  const setAbortController = useAppStore((s) => s.setAbortController);
+  const stopGeneration = useAppStore((s) => s.stopGeneration);
+  const deleteMessage = useAppStore((s) => s.deleteMessage);
+  const setConversationTitle = useAppStore((s) => s.setConversationTitle);
   const screenContext = useAppStore((s) => s.screenContext);
   const setScreenContext = useAppStore((s) => s.setScreenContext);
   const backendReady = useAppStore((s) => s.backendReady);
@@ -37,6 +43,7 @@ export function ChatView() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const titleGeneratedRef = useRef<Set<string>>(new Set());
 
   // File objects stored separately (not serializable)
   const pendingFilesRef = useRef<Map<string, File>>(new Map());
@@ -104,13 +111,100 @@ export function ChatView() {
     return parts.length > 1 ? parts[1] : name;
   };
 
+  // ── Auto-title generation ──
+  const tryAutoTitle = useCallback(async (messageContent: string, convoId: string) => {
+    if (!backendReady || titleGeneratedRef.current.has(convoId)) return;
+    titleGeneratedRef.current.add(convoId);
+
+    const title = await generateTitle(messageContent);
+    if (title) {
+      setConversationTitle(convoId, title);
+    }
+  }, [backendReady, setConversationTitle]);
+
+  // ── Core send logic (reusable for send + regenerate) ──
+  const doSend = useCallback(async (
+    messageContent: string,
+    processedAttachments: ChatAttachment[],
+    imageDataUrls: Map<string, string>,
+    existingMessages: typeof messages,
+  ) => {
+    const convoId = useAppStore.getState().activeConversationId;
+    if (!convoId) return;
+
+    setIsGenerating(true);
+
+    const assistantMsg = {
+      id: crypto.randomUUID(),
+      role: 'assistant' as const,
+      content: '',
+      timestamp: new Date().toISOString(),
+      isStreaming: true,
+    };
+    addMessage(assistantMsg);
+
+    if (backendReady) {
+      const imagePayload = processedAttachments
+        .filter((a) => a.type === 'image' && (imageDataUrls.has(a.name) || a.dataUrl))
+        .map((a) => ({
+          data_url: imageDataUrls.get(a.name) || a.dataUrl!,
+          name: a.name,
+        }));
+
+      const conversationHistory = existingMessages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : '',
+      }));
+
+      const abortCtrl = new AbortController();
+      setAbortController(abortCtrl);
+
+      let accumulated = '';
+      await streamChat(
+        messageContent,
+        activeSpaceId || 'default',
+        screenContext,
+        (chunk) => {
+          accumulated += chunk;
+          useAppStore.getState().updateMessage(assistantMsg.id, accumulated);
+        },
+        (error) => {
+          accumulated += `\n\n⚠️ Error: ${error}`;
+          useAppStore.getState().updateMessage(assistantMsg.id, accumulated);
+        },
+        () => {
+          setIsGenerating(false);
+          setAbortController(null);
+        },
+        activeSpace?.textContext,
+        imagePayload,
+        conversationHistory,
+        abortCtrl.signal,
+      );
+
+      // Auto-title on first user message
+      if (existingMessages.length <= 1) {
+        tryAutoTitle(messageContent, convoId);
+      }
+    } else {
+      const response = `I'm ContextAI running in **offline mode** — the Python backend isn't connected yet.\n\n**To enable real AI responses:**\n1. Open a terminal in \`contextai/backend\`\n2. Run: \`.venv\\\\Scripts\\\\activate\`\n3. Run: \`python -m app.main\`\n4. The status indicator will turn green ✅`;
+
+      let current = '';
+      for (let i = 0; i < response.length; i++) {
+        current += response[i];
+        useAppStore.getState().updateMessage(assistantMsg.id, current);
+        await new Promise((r) => setTimeout(r, 8));
+      }
+      setIsGenerating(false);
+    }
+  }, [activeSpaceId, activeSpace, backendReady, screenContext, addMessage, setIsGenerating, setAbortController, tryAutoTitle]);
+
   const handleSend = async () => {
     const text = input.trim();
     if ((!text && attachments.length === 0) || isGenerating) return;
 
     // 1. Upload attached files to the active space for indexing
     const processedAttachments: ChatAttachment[] = [];
-    // Keep original base64 data for the LLM vision call (not stored in conversation)
     const imageDataUrls = new Map<string, string>();
     if (attachments.length > 0 && backendReady) {
       setUploadingFiles(true);
@@ -120,7 +214,6 @@ export function ChatView() {
         const file = pendingFilesRef.current.get(attachId);
 
         if (file && att.type === 'file') {
-          // Upload document files to the space for RAG indexing
           const result = await uploadFile(activeSpaceId, file);
           processedAttachments.push({
             name: displayName,
@@ -129,9 +222,7 @@ export function ChatView() {
             indexed: result?.indexing?.status === 'indexed',
           });
         } else if (att.type === 'image' && att.dataUrl) {
-          // Preserve original base64 for the LLM call
           imageDataUrls.set(displayName, att.dataUrl);
-          // Upload image to backend attachment storage — replaces base64 with URL
           const uploaded = await uploadAttachment(att.dataUrl, displayName);
           if (uploaded) {
             processedAttachments.push({
@@ -139,10 +230,8 @@ export function ChatView() {
               type: att.type,
               size: uploaded.size,
               url: uploaded.url,
-              // dataUrl intentionally omitted — no longer stored in conversation JSON
             });
           } else {
-            // Fallback: keep dataUrl if upload failed (offline etc.)
             processedAttachments.push({
               name: displayName,
               type: att.type,
@@ -187,65 +276,44 @@ export function ChatView() {
       textareaRef.current.style.height = '20px';
     }
 
-    setIsGenerating(true);
+    await doSend(messageContent, processedAttachments, imageDataUrls, messages);
+  };
 
-    const assistantMsg = {
-      id: crypto.randomUUID(),
-      role: 'assistant' as const,
-      content: '',
-      timestamp: new Date().toISOString(),
-      isStreaming: true,
-    };
-    addMessage(assistantMsg);
+  // ── Regenerate last response ──
+  const handleRegenerate = useCallback(async () => {
+    if (isGenerating || messages.length < 2) return;
 
-    if (backendReady) {
-      // Build image payload for multi-modal LLM vision.
-      // Use the original base64 dataUrl (kept in memory, NOT persisted),
-      // because the LLM API requires data: URIs, not HTTP URLs.
-      const imagePayload = processedAttachments
-        .filter((a) => a.type === 'image' && (imageDataUrls.has(a.name) || a.dataUrl))
-        .map((a) => ({
-          data_url: imageDataUrls.get(a.name) || a.dataUrl!,
-          name: a.name,
-        }));
+    // Find the last user message
+    const lastAssistantIdx = messages.length - 1;
+    if (messages[lastAssistantIdx].role !== 'assistant') return;
 
-      // Build conversation history from all prior messages (exclude current)
-      const conversationHistory = messages.map((m) => ({
-        role: m.role,
-        content: typeof m.content === 'string' ? m.content : '',
-      }));
+    const lastUserMsg = messages[messages.length - 2];
+    if (lastUserMsg.role !== 'user') return;
 
-      let accumulated = '';
-      await streamChat(
-        messageContent,
-        activeSpaceId || 'default',
-        screenContext,
-        (chunk) => {
-          accumulated += chunk;
-          useAppStore.getState().updateMessage(assistantMsg.id, accumulated);
-        },
-        (error) => {
-          accumulated += `\n\n⚠️ Error: ${error}`;
-          useAppStore.getState().updateMessage(assistantMsg.id, accumulated);
-        },
-        () => {
-          setIsGenerating(false);
-        },
-        activeSpace?.textContext,
-        imagePayload,
-        conversationHistory,
-      );
-    } else {
-      const response = `I'm ContextAI running in **offline mode** — the Python backend isn't connected yet.\n\n**To enable real AI responses:**\n1. Open a terminal in \`contextai/backend\`\n2. Run: \`.venv\\\\Scripts\\\\activate\`\n3. Run: \`python -m app.main\`\n4. The status indicator will turn green ✅`;
+    // Remove last assistant message
+    deleteMessage(messages[lastAssistantIdx].id);
 
-      let current = '';
-      for (let i = 0; i < response.length; i++) {
-        current += response[i];
-        useAppStore.getState().updateMessage(assistantMsg.id, current);
-        await new Promise((r) => setTimeout(r, 8));
-      }
-      setIsGenerating(false);
-    }
+    // Re-send with the prior messages (excluding the one we just deleted)
+    const priorMessages = messages.slice(0, messages.length - 1);
+    await doSend(lastUserMsg.content, [], new Map(), priorMessages);
+  }, [isGenerating, messages, deleteMessage, doSend]);
+
+  // ── Export conversation ──
+  const handleExport = () => {
+    if (!activeConvo || messages.length === 0) return;
+
+    const md = messages
+      .map((m) => `### ${m.role === 'user' ? '🧑 User' : '🤖 Assistant'}\n${m.content}`)
+      .join('\n\n---\n\n');
+
+    const blob = new Blob([`# ${activeConvo.title}\n\n${md}`], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${activeConvo.title.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'chat'}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Conversation exported');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -253,6 +321,7 @@ export function ChatView() {
       e.preventDefault();
       handleSend();
     }
+    // Up arrow in empty input — edit last user message (future)
   };
 
   const handleTextareaInput = () => {
@@ -261,6 +330,21 @@ export function ChatView() {
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   };
+
+  const handleDeleteMessage = (msgId: string) => {
+    deleteMessage(msgId);
+    toast.info('Message deleted');
+  };
+
+  const handleRate = async (msgId: string, rating: 'up' | 'down') => {
+    await rateMessage(msgId, rating === 'up' ? 5 : 1);
+    toast.success(rating === 'up' ? 'Thanks for the feedback!' : 'Noted — will improve');
+  };
+
+  // Find the last assistant message ID for regenerate button
+  const lastAssistantId = messages.length > 0 && messages[messages.length - 1].role === 'assistant'
+    ? messages[messages.length - 1].id
+    : null;
 
   const quickActions = [
     {
@@ -307,15 +391,26 @@ export function ChatView() {
           <span className="chat-header__icon">{activeSpace?.icon}</span>
           <span className="chat-header__name">{activeSpace?.name}</span>
         </div>
-        <button
-          className="btn-ghost btn-sm"
-          onClick={handleNewChat}
-          disabled={messages.length === 0}
-          title="New Chat"
-        >
-          <PlusCircle size={15} />
-          <span>New Chat</span>
-        </button>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {messages.length > 0 && (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={handleExport}
+              title="Export as Markdown"
+            >
+              <Download size={14} />
+            </button>
+          )}
+          <button
+            className="btn-ghost btn-sm"
+            onClick={handleNewChat}
+            disabled={messages.length === 0}
+            title="New Chat"
+          >
+            <PlusCircle size={15} />
+            <span>New Chat</span>
+          </button>
+        </div>
       </div>
 
       {screenContext && (
@@ -376,9 +471,23 @@ export function ChatView() {
                     <span className="loading-dots"><span></span><span></span><span></span></span>
                   )}
                 </div>
-                <span className="message__meta">
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="message__footer">
+                  <span className="message__meta">
+                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {!msg.isStreaming && (
+                    <MessageActions
+                      role={msg.role}
+                      content={msg.content}
+                      isLast={msg.id === lastAssistantId}
+                      isGenerating={isGenerating}
+                      onCopy={() => toast.success('Copied to clipboard')}
+                      onDelete={() => handleDeleteMessage(msg.id)}
+                      onRegenerate={msg.id === lastAssistantId ? handleRegenerate : undefined}
+                      onRate={(rating) => handleRate(msg.id, rating)}
+                    />
+                  )}
+                </div>
               </div>
             ))}
             <div ref={messagesEndRef} />
@@ -480,13 +589,25 @@ export function ChatView() {
               <Zap size={14} />
             </button>
           )}
-          <button
-            className="chat-send-btn"
-            onClick={handleSend}
-            disabled={(!input.trim() && attachments.length === 0) || isGenerating || uploadingFiles}
-          >
-            <Send size={16} />
-          </button>
+
+          {/* Send / Stop button */}
+          {isGenerating ? (
+            <button
+              className="chat-send-btn chat-send-btn--stop"
+              onClick={stopGeneration}
+              title="Stop generating"
+            >
+              <Square size={14} />
+            </button>
+          ) : (
+            <button
+              className="chat-send-btn"
+              onClick={handleSend}
+              disabled={(!input.trim() && attachments.length === 0) || uploadingFiles}
+            >
+              <Send size={16} />
+            </button>
+          )}
         </div>
       </div>
     </div>
