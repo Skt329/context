@@ -4,6 +4,7 @@ import { useAppStore, type ChatAttachment } from '../stores/appStore';
 import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl, generateTitle, rateMessage } from '../lib/api';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageActions } from './MessageActions';
+import { SpaceSwitcher } from './SpaceSwitcher';
 import { toast } from './Toast';
 
 export function ChatView() {
@@ -387,10 +388,7 @@ export function ChatView() {
     <div className="chat-view">
       {/* Chat header */}
       <div className="chat-header">
-        <div className="chat-header__space">
-          <span className="chat-header__icon">{activeSpace?.icon}</span>
-          <span className="chat-header__name">{activeSpace?.name}</span>
-        </div>
+        <SpaceSwitcher />
         <div style={{ display: 'flex', gap: '4px' }}>
           {messages.length > 0 && (
             <button
