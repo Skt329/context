@@ -13,8 +13,9 @@
  *   EXPANDED → Input bar + response panel above (after send)
  *
  * Features:
- *   - Space switcher dropdown (opens upward)
- *   - Auto-captures screen context
+ *   - Compact space icon (expands name on hover)
+ *   - Space switcher dropdown with chat history flyout
+ *   - File/image attachments (📎 button)
  *   - Streaming response with markdown rendering
  *   - Copy / Inject / New Chat / Dismiss
  *   - Esc to dismiss, Enter to send
@@ -23,15 +24,21 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Square, Copy, Check, Zap, ArrowUpRight,
-  ChevronDown, RotateCcw, X, Sparkles,
+  ChevronDown, RotateCcw, X, Sparkles, Paperclip,
 } from 'lucide-react';
-import { useAppStore } from '../stores/appStore';
-import { streamChat, captureScreenContext, generateTitle } from '../lib/api';
+import { useAppStore, type ChatAttachment } from '../stores/appStore';
+import {
+  streamChat, captureScreenContext, generateTitle,
+  listConversations, type ConversationSummary,
+} from '../lib/api';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { toast } from './Toast';
 import { isTauri } from '../lib/env';
 
 type WidgetState = 'idle' | 'active' | 'expanded';
+
+const MAX_ATTACHMENTS = 3;
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 export function WidgetBar() {
   const [widgetState, setWidgetState] = useState<WidgetState>('idle');
@@ -41,10 +48,15 @@ export function WidgetBar() {
   const [copied, setCopied] = useState(false);
   const [contextInfo, setContextInfo] = useState<string | null>(null);
   const [spaceSelectorOpen, setSpaceSelectorOpen] = useState(false);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
+  const [spaceChats, setSpaceChats] = useState<ConversationSummary[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const spaceSelectorRef = useRef<HTMLDivElement>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Store
   const activeSpaceId = useAppStore((s) => s.activeSpaceId);
@@ -55,6 +67,7 @@ export function WidgetBar() {
   const setConversationTitle = useAppStore((s) => s.setConversationTitle);
   const newChat = useAppStore((s) => s.newChat);
   const setActiveSpace = useAppStore((s) => s.setActiveSpace);
+  const loadConversation = useAppStore((s) => s.loadConversation);
   const activeSpace = spaces.find((s) => s.id === activeSpaceId);
 
   // Auto-capture screen context once backend is ready
@@ -82,6 +95,7 @@ export function WidgetBar() {
       if (e.key === 'Escape') {
         if (spaceSelectorOpen) {
           setSpaceSelectorOpen(false);
+          setHoveredSpaceId(null);
         } else if (widgetState === 'expanded' || widgetState === 'active') {
           if (!isStreaming) {
             resetToIdle();
@@ -100,11 +114,32 @@ export function WidgetBar() {
     const handler = (e: MouseEvent) => {
       if (spaceSelectorRef.current && !spaceSelectorRef.current.contains(e.target as Node)) {
         setSpaceSelectorOpen(false);
+        setHoveredSpaceId(null);
       }
     };
     if (spaceSelectorOpen) document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [spaceSelectorOpen]);
+
+  // Fetch chats when hovering a space in the dropdown
+  useEffect(() => {
+    if (!hoveredSpaceId) {
+      setSpaceChats([]);
+      return;
+    }
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(async () => {
+      try {
+        const chats = await listConversations(hoveredSpaceId);
+        setSpaceChats(chats.slice(0, 8)); // max 8 recent
+      } catch {
+        setSpaceChats([]);
+      }
+    }, 150);
+    return () => {
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    };
+  }, [hoveredSpaceId]);
 
   // Return to idle after mouse leaves (only when in 'active' state, no input)
   const handleMouseEnter = useCallback(() => {
@@ -118,13 +153,13 @@ export function WidgetBar() {
   }, [widgetState]);
 
   const handleMouseLeave = useCallback(() => {
-    // Only return to idle if no input, no response, and not streaming
-    if (widgetState === 'active' && !input.trim() && !response && !isStreaming) {
+    // Only return to idle if no input, no response, no attachments, and not streaming
+    if (widgetState === 'active' && !input.trim() && !response && !isStreaming && attachments.length === 0) {
       idleTimerRef.current = setTimeout(() => {
         setWidgetState('idle');
       }, 800);
     }
-  }, [widgetState, input, response, isStreaming]);
+  }, [widgetState, input, response, isStreaming, attachments]);
 
   const resetToIdle = () => {
     setWidgetState('idle');
@@ -132,6 +167,8 @@ export function WidgetBar() {
     setInput('');
     setIsStreaming(false);
     setSpaceSelectorOpen(false);
+    setAttachments([]);
+    setHoveredSpaceId(null);
   };
 
   const hideWidget = async () => {
@@ -152,6 +189,8 @@ export function WidgetBar() {
     setResponse('');
     setIsStreaming(true);
     setInput('');
+    const sendAttachments = [...attachments];
+    setAttachments([]);
 
     if (!activeConversationId) {
       newChat();
@@ -162,6 +201,7 @@ export function WidgetBar() {
       role: 'user' as const,
       content: text,
       timestamp: new Date().toISOString(),
+      attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
     };
     addMessage(userMsg);
 
@@ -179,6 +219,11 @@ export function WidgetBar() {
       isStreaming: true,
     };
     addMessage(assistantMsg);
+
+    // Convert image attachments to the format streamChat expects
+    const imagePayload = sendAttachments
+      .filter((a) => a.type === 'image' && a.dataUrl)
+      .map((a) => ({ data_url: a.dataUrl!, name: a.name }));
 
     await streamChat(
       text,
@@ -199,7 +244,7 @@ export function WidgetBar() {
         abortRef.current = null;
       },
       activeSpace?.textContext,
-      undefined,
+      imagePayload.length > 0 ? imagePayload : undefined,
       undefined,
       abortCtrl.signal,
     );
@@ -240,7 +285,6 @@ export function WidgetBar() {
       console.error('[inject error]', e);
       toast.error('Injection failed');
     }
-    // Don't reset — widget stays visible so user can re-inject or dismiss
   };
 
   const handleNewChat = () => {
@@ -248,6 +292,7 @@ export function WidgetBar() {
     setWidgetState('active');
     setResponse('');
     setInput('');
+    setAttachments([]);
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
@@ -257,7 +302,74 @@ export function WidgetBar() {
       newChat();
     }
     setSpaceSelectorOpen(false);
+    setHoveredSpaceId(null);
     inputRef.current?.focus();
+  };
+
+  const handleChatSelect = (chatId: string, spaceId: string) => {
+    // Switch space if needed
+    if (spaceId !== activeSpaceId) {
+      setActiveSpace(spaceId);
+    }
+    loadConversation(chatId);
+    setSpaceSelectorOpen(false);
+    setHoveredSpaceId(null);
+
+    // Load last assistant response into the widget
+    setTimeout(() => {
+      const convo = useAppStore.getState().getActiveConversation();
+      if (convo && convo.messages.length > 0) {
+        const lastAssistant = [...convo.messages].reverse().find((m) => m.role === 'assistant');
+        if (lastAssistant) {
+          setResponse(lastAssistant.content);
+          setWidgetState('expanded');
+        } else {
+          setWidgetState('active');
+        }
+      }
+    }, 200);
+  };
+
+  // ── Attachment handling ──
+  const handleAttachClick = () => {
+    if (attachments.length >= MAX_ATTACHMENTS) {
+      toast.info(`Max ${MAX_ATTACHMENTS} attachments`);
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach((file) => {
+      if (attachments.length >= MAX_ATTACHMENTS) return;
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`${file.name} is too large (max 5MB)`);
+        return;
+      }
+
+      const isImage = file.type.startsWith('image/');
+      const reader = new FileReader();
+      reader.onload = () => {
+        const attachment: ChatAttachment = {
+          name: file.name,
+          type: isImage ? 'image' : 'file',
+          size: file.size,
+          dataUrl: reader.result as string,
+        };
+        setAttachments((prev) => [...prev.slice(0, MAX_ATTACHMENTS - 1), attachment]);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Reset input so the same file can be selected again
+    e.target.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -271,6 +383,15 @@ export function WidgetBar() {
     if (widgetState === 'idle') {
       setWidgetState('active');
     }
+  };
+
+  const formatTime = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    if (diff < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (diff < 172800000) return 'Yesterday';
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
   return (
@@ -317,12 +438,31 @@ export function WidgetBar() {
         </div>
       )}
 
+      {/* ── Attachment chips (between actions/response and input bar) ── */}
+      {attachments.length > 0 && widgetState !== 'idle' && (
+        <div className="wgt__attach-chips">
+          {attachments.map((att, i) => (
+            <div key={i} className="wgt__attach-chip">
+              {att.type === 'image' && att.dataUrl ? (
+                <img src={att.dataUrl} alt={att.name} className="wgt__attach-thumb" />
+              ) : (
+                <Paperclip size={10} />
+              )}
+              <span className="wgt__attach-name">{att.name}</span>
+              <button className="wgt__attach-remove" onClick={() => removeAttachment(i)}>
+                <X size={8} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Input bar / Pill ── */}
       <div
         className={`wgt__bar ${widgetState === 'idle' ? 'wgt__bar--pill' : 'wgt__bar--full'}`}
         onClick={handlePillClick}
       >
-        {/* Space selector */}
+        {/* Space selector (compact icon, expands on hover) */}
         <div className="wgt__space" ref={spaceSelectorRef}>
           <button
             className="wgt__space-btn"
@@ -334,18 +474,40 @@ export function WidgetBar() {
           >
             <span className="wgt__space-emoji">{activeSpace?.icon || '🔮'}</span>
             {widgetState !== 'idle' && (
-              <>
+              <span className="wgt__space-expand">
                 <span className="wgt__space-name">{activeSpace?.name || 'Default'}</span>
                 <ChevronDown
                   size={10}
                   className={`wgt__space-chev ${spaceSelectorOpen ? 'wgt__space-chev--open' : ''}`}
                 />
-              </>
+              </span>
             )}
           </button>
 
+          {/* ── Space dropdown + chat history flyout ── */}
           {spaceSelectorOpen && spaces.length > 0 && (
-            <div className="wgt__space-drop">
+            <div className="wgt__space-drop" onMouseLeave={() => setHoveredSpaceId(null)}>
+              {/* Chat history flyout (above dropdown) */}
+              {hoveredSpaceId && spaceChats.length > 0 && (
+                <div className="wgt__history-fly">
+                  <div className="wgt__history-label">Recent chats</div>
+                  {spaceChats.map((chat) => (
+                    <button
+                      key={chat.id}
+                      className="wgt__history-item"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleChatSelect(chat.id, hoveredSpaceId);
+                      }}
+                    >
+                      <span className="wgt__history-title">{chat.title || 'Untitled'}</span>
+                      <span className="wgt__history-time">{formatTime(chat.updatedAt)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Space list */}
               {spaces.map((space) => (
                 <button
                   key={space.id}
@@ -354,9 +516,11 @@ export function WidgetBar() {
                     e.stopPropagation();
                     handleSpaceSelect(space.id);
                   }}
+                  onMouseEnter={() => setHoveredSpaceId(space.id)}
                 >
                   <span>{space.icon}</span>
                   <span className="wgt__space-opt-name">{space.name}</span>
+                  <ChevronDown size={9} className="wgt__space-opt-arrow" />
                 </button>
               ))}
             </div>
@@ -379,6 +543,26 @@ export function WidgetBar() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={isStreaming || !backendReady}
+            />
+
+            {/* Attach button */}
+            <button
+              className="wgt__attach-btn"
+              onClick={handleAttachClick}
+              title="Attach file or image"
+              disabled={isStreaming}
+            >
+              <Paperclip size={12} />
+            </button>
+
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.csv"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileSelect}
             />
 
             {contextInfo && (

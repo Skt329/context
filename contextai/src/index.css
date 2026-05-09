@@ -1627,20 +1627,40 @@ html, body, #root {
   50% { opacity: 1; }
 }
 
-/* ── Space selector ── */
+/* ── Space selector (compact icon → expand on hover) ── */
 .wgt__space { position: relative; flex-shrink: 0; }
 .wgt__space-btn {
-  display: flex; align-items: center; gap: 5px;
-  padding: 4px 8px; background: rgba(255,255,255,0.05);
+  display: flex; align-items: center; gap: 0;
+  padding: 4px 6px; background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.06); border-radius: 10px;
-  cursor: pointer; transition: all 0.2s; color: var(--text-secondary);
-  font-family: var(--font-sans); font-size: 12px;
+  cursor: pointer; transition: all 0.25s cubic-bezier(0.16,1,0.3,1);
+  color: var(--text-secondary); font-family: var(--font-sans); font-size: 12px;
 }
 .wgt__space-btn:hover {
   background: rgba(255,255,255,0.1);
   border-color: rgba(255,255,255,0.14);
+  gap: 5px;
 }
-.wgt__space-emoji { font-size: 14px; line-height: 1; }
+.wgt__space-emoji { font-size: 14px; line-height: 1; flex-shrink: 0; }
+
+/* Name + chevron hidden by default, expand on hover */
+.wgt__space-expand {
+  display: flex; align-items: center; gap: 4px;
+  max-width: 0; overflow: hidden; opacity: 0;
+  transition: max-width 0.3s cubic-bezier(0.16,1,0.3,1),
+              opacity 0.2s ease, margin 0.3s ease;
+  white-space: nowrap; margin-left: 0;
+}
+.wgt__space-btn:hover .wgt__space-expand,
+.wgt__space-btn:focus-within .wgt__space-expand,
+.wgt__space-drop ~ .wgt__space-btn .wgt__space-expand {
+  max-width: 140px; opacity: 1; margin-left: 2px;
+}
+/* Keep expanded when dropdown is open */
+.wgt__space:has(.wgt__space-drop) .wgt__space-expand {
+  max-width: 140px; opacity: 1; margin-left: 2px;
+}
+
 .wgt__space-name {
   max-width: 90px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-weight: 500;
@@ -1651,9 +1671,10 @@ html, body, #root {
 }
 .wgt__space-chev--open { transform: rotate(180deg); }
 
+/* ── Space dropdown ── */
 .wgt__space-drop {
   position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 200;
-  min-width: 180px; max-height: 220px; overflow-y: auto; padding: 4px;
+  min-width: 200px; max-height: 280px; overflow: visible; padding: 4px;
   background: rgba(18,18,26,0.98); border: 1px solid rgba(255,255,255,0.1);
   border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.55);
   animation: drop-in 0.18s cubic-bezier(0.16,1,0.3,1);
@@ -1667,7 +1688,7 @@ html, body, #root {
   padding: 7px 10px; background: transparent; border: none;
   border-radius: 8px; color: var(--text-secondary); font-size: 12px;
   font-family: var(--font-sans); cursor: pointer; transition: all 0.15s;
-  text-align: left;
+  text-align: left; position: relative;
 }
 .wgt__space-opt:hover {
   background: rgba(255,255,255,0.08);
@@ -1678,8 +1699,107 @@ html, body, #root {
   color: var(--accent);
 }
 .wgt__space-opt-name {
-  font-weight: 500; overflow: hidden;
+  flex: 1; font-weight: 500; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
+}
+.wgt__space-opt-arrow {
+  color: rgba(255,255,255,0.15); flex-shrink: 0;
+  transform: rotate(-90deg); transition: color 0.15s;
+}
+.wgt__space-opt:hover .wgt__space-opt-arrow {
+  color: rgba(255,255,255,0.4);
+}
+
+/* ── Chat history flyout (appears above dropdown on space hover) ── */
+.wgt__history-fly {
+  padding: 4px 4px 6px; margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  animation: fly-in 0.2s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes fly-in {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 300px; }
+}
+.wgt__history-label {
+  font-size: 9px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: rgba(255,255,255,0.25);
+  padding: 2px 8px 4px; font-family: var(--font-sans);
+}
+.wgt__history-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; width: 100%; padding: 6px 10px;
+  background: transparent; border: none; border-radius: 7px;
+  cursor: pointer; transition: all 0.15s; text-align: left;
+  font-family: var(--font-sans);
+}
+.wgt__history-item:hover {
+  background: rgba(96,165,250,0.1);
+}
+.wgt__history-title {
+  font-size: 11px; color: var(--text-secondary); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.wgt__history-item:hover .wgt__history-title {
+  color: var(--text-primary);
+}
+.wgt__history-time {
+  font-size: 9px; color: rgba(255,255,255,0.2); flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── Attachment button ── */
+.wgt__attach-btn {
+  width: 26px; height: 26px; display: flex; align-items: center;
+  justify-content: center; background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;
+  color: var(--text-muted); cursor: pointer; flex-shrink: 0;
+  transition: all 0.2s;
+}
+.wgt__attach-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text-secondary);
+  border-color: rgba(255,255,255,0.14);
+}
+.wgt__attach-btn:disabled {
+  opacity: 0.3; cursor: not-allowed;
+}
+
+/* ── Attachment chips (between response/actions and input bar) ── */
+.wgt__attach-chips {
+  display: flex; gap: 4px; padding: 4px 12px;
+  background: rgba(16,16,22,0.94);
+  border-left: 1px solid rgba(255,255,255,0.09);
+  border-right: 1px solid rgba(255,255,255,0.09);
+  flex-wrap: wrap;
+}
+.wgt__attach-chip {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+  font-size: 10px; color: var(--text-muted); font-family: var(--font-sans);
+  max-width: 120px; animation: chip-in 0.2s ease;
+}
+@keyframes chip-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.wgt__attach-thumb {
+  width: 18px; height: 18px; border-radius: 3px;
+  object-fit: cover; flex-shrink: 0;
+}
+.wgt__attach-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 70px;
+}
+.wgt__attach-remove {
+  display: flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; background: rgba(255,255,255,0.06);
+  border: none; border-radius: 50%; color: var(--text-muted);
+  cursor: pointer; transition: all 0.15s; flex-shrink: 0;
+}
+.wgt__attach-remove:hover {
+  background: rgba(239,68,68,0.2); color: #ef4444;
 }
 
 /* ── Input ── */
