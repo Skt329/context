@@ -63,6 +63,12 @@ def ensure_data_dirs():
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     ensure_data_dirs()
+
+    # Initialize SQLite database and migrate legacy data
+    from app.db import init_db, migrate_from_legacy
+    init_db()
+    migrate_from_legacy()
+
     logger.info(f"ContextAI backend started — data dir: {DATA_DIR}")
     yield
     logger.info("ContextAI backend shutting down")
@@ -112,7 +118,7 @@ def main():
     logger.info(f"Starting ContextAI backend on port {port}")
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=port,
         log_level="info",
         reload=False,

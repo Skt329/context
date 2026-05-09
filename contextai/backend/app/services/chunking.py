@@ -229,3 +229,58 @@ def _hard_chunk(text: str, target_size: int, overlap: int) -> list[str]:
         chunks.append(current)
 
     return chunks
+
+
+# ── LLM Contextualization ─────────────────────────────────────
+
+
+CONTEXT_PROMPT = """Here is a document:
+<document>
+{doc_title}
+{doc_excerpt}
+</document>
+
+Here is a chunk from that document:
+<chunk>
+{chunk_text}
+</chunk>
+
+Write a short context (2-3 sentences max) that explains what this chunk is about and how it fits in the broader document. This context will be prepended to the chunk to improve search retrieval. Be concise and factual."""
+
+
+async def contextualize_chunks(
+    chunks: list[Chunk],
+    full_text: str,
+) -> list[Chunk]:
+    """Add contextual descriptions to each chunk using the user's LLM.
+
+    Implements Anthropic's Contextual Retrieval approach:
+    each chunk gets a 2-3 sentence context prepended that explains
+    what the chunk is about within the broader document.
+
+    If no LLM is available, chunks are returned unchanged.
+    """
+    from app.utils.llm import llm_complete
+
+    doc_excerpt = full_text[:2000]
+
+    for chunk in chunks:
+        try:
+            context = await llm_complete(
+                CONTEXT_PROMPT.format(
+                    doc_title=chunk.source_file,
+                    doc_excerpt=doc_excerpt,
+                    chunk_text=chunk.text[:1000],
+                ),
+                max_tokens=150,
+                temperature=0.0,
+            )
+            if context:
+                chunk.contextualized_text = f"{context}\n\n{chunk.text}"
+        except Exception as e:
+            logger.debug(f"Contextualization failed for chunk {chunk.index}: {e}")
+
+    contextualized_count = sum(1 for c in chunks if c.contextualized_text)
+    if contextualized_count:
+        logger.info(f"Contextualized {contextualized_count}/{len(chunks)} chunks")
+    return chunks

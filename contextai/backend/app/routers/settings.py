@@ -1,4 +1,7 @@
-"""Settings router — provider configuration, API key management, and Ollama model detection."""
+"""Settings router — provider configuration, API key management, and Ollama model detection.
+
+Settings are stored in SQLite (via app.db) as key-value pairs.
+"""
 
 import json
 import os
@@ -7,10 +10,10 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.db import get_db
+
 logger = logging.getLogger("contextai.settings")
 
-DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai")
-SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 OLLAMA_BASE = "http://localhost:11434"
 
 router = APIRouter()
@@ -28,18 +31,41 @@ class BulkProviderSync(BaseModel):
     providers: dict[str, dict]
 
 
-def load_settings() -> dict:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r") as f:
-            return json.load(f)
-    return {"providers": {}, "preferences": {}}
+# ── Settings helpers ──────────────────────────────────────────────
+
+def _load_setting(key: str, default=None):
+    """Load a single setting from SQLite."""
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        if row:
+            return json.loads(row["value"])
+        return default
+    finally:
+        conn.close()
 
 
-def save_settings(settings: dict):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=2)
+def _save_setting(key: str, value):
+    """Save a single setting to SQLite (upsert)."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+            (key, json.dumps(value, ensure_ascii=False), json.dumps(value, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_providers() -> dict:
+    """Load all provider configurations."""
+    return _load_setting("providers", {})
+
+
+def save_providers(providers: dict):
+    """Save all provider configurations."""
+    _save_setting("providers", providers)
 
 
 # ── Ollama Detection ──────────────────────────────────────────────
@@ -87,9 +113,8 @@ async def ollama_status():
 
 @router.get("/providers")
 async def get_providers():
-    """Get all provider configurations."""
-    settings = load_settings()
-    providers = settings.get("providers", {})
+    """Get all provider configurations (keys masked)."""
+    providers = load_providers()
     masked = {}
     for pid, config in providers.items():
         masked[pid] = {**config}
@@ -105,8 +130,7 @@ async def get_providers():
 @router.put("/providers/{provider_id}")
 async def update_provider(provider_id: str, update: ProviderUpdate):
     """Update a single provider's configuration."""
-    settings = load_settings()
-    providers = settings.setdefault("providers", {})
+    providers = load_providers()
     current = providers.get(provider_id, {})
 
     if update.enabled is not None:
@@ -119,8 +143,7 @@ async def update_provider(provider_id: str, update: ProviderUpdate):
         current["api_base"] = update.api_base
 
     providers[provider_id] = current
-    settings["providers"] = providers
-    save_settings(settings)
+    save_providers(providers)
     logger.info(f"Updated provider '{provider_id}': enabled={current.get('enabled')}, model={current.get('model')}")
 
     return {"status": "updated", "provider": provider_id}
@@ -129,8 +152,7 @@ async def update_provider(provider_id: str, update: ProviderUpdate):
 @router.post("/providers/sync")
 async def sync_providers(sync: BulkProviderSync):
     """Bulk sync all provider configs from the frontend."""
-    settings = load_settings()
-    existing = settings.get("providers", {})
+    existing = load_providers()
 
     for pid, frontend_config in sync.providers.items():
         current = existing.get(pid, {})
@@ -142,8 +164,7 @@ async def sync_providers(sync: BulkProviderSync):
             current["model"] = frontend_config["model"]
         existing[pid] = current
 
-    settings["providers"] = existing
-    save_settings(settings)
+    save_providers(existing)
     logger.info(f"Synced {len(sync.providers)} provider configs")
 
     return {"status": "synced", "count": len(sync.providers)}
@@ -152,8 +173,8 @@ async def sync_providers(sync: BulkProviderSync):
 @router.post("/providers/{provider_id}/test")
 async def test_provider(provider_id: str):
     """Test a provider connection with a minimal API call."""
-    settings = load_settings()
-    provider = settings.get("providers", {}).get(provider_id, {})
+    providers = load_providers()
+    provider = providers.get(provider_id, {})
 
     if provider_id == "ollama":
         # For Ollama, test by checking if the model exists

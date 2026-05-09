@@ -3,7 +3,33 @@
  * Connects the React frontend to the FastAPI backend on localhost:8742
  */
 
-const BASE_URL = 'http://localhost:8742/api';
+const BASE_URL = 'http://127.0.0.1:8742/api';
+
+/**
+ * Fetch with automatic retry and exponential backoff.
+ * Used for non-streaming API calls to handle transient failures.
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries = 3,
+  backoffMs = 500,
+): Promise<Response> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || res.status < 500) return res;
+      // Server error — retry
+      if (attempt < retries - 1) {
+        await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
+      }
+    } catch (error) {
+      if (attempt === retries - 1) throw error;
+      await new Promise((r) => setTimeout(r, backoffMs * (attempt + 1)));
+    }
+  }
+  throw new Error(`Request failed after ${retries} retries: ${url}`);
+}
 
 /** Check if the backend is running */
 export async function checkHealth(): Promise<{ status: string; version: string } | null> {
@@ -579,5 +605,5 @@ export function attachmentUrl(relativeUrl: string): string {
   if (relativeUrl.startsWith('http')) return relativeUrl;
   if (relativeUrl.startsWith('data:')) return relativeUrl;
   // relativeUrl is like "/api/attachments/{filename}"
-  return `http://localhost:8742${relativeUrl}`;
+  return `http://127.0.0.1:8742${relativeUrl}`;
 }

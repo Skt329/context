@@ -98,8 +98,8 @@ async def update_profile(space_id: str, body: MemoryContent):
 
 @router.post("/extract")
 async def extract_from_chat(body: ChatMessages):
-    """Extract and store facts from a conversation."""
-    count = auto_update_memory_from_chat(body.messages, body.space_id)
+    """Extract and store facts from a conversation (uses LLM if available)."""
+    count = await auto_update_memory_from_chat(body.messages, body.space_id)
     return {"status": "ok", "facts_extracted": count, "space_id": body.space_id}
 
 
@@ -108,5 +108,5 @@ async def extract_from_chat(body: ChatMessages):
 @router.get("/context/{space_id}")
 async def get_full_context(space_id: str):
     """Get the full combined memory context that would be injected into the system prompt."""
-    context = build_memory_context(space_id)
+    context = await build_memory_context(space_id)
     return {"content": context, "space_id": space_id}

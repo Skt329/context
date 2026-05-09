@@ -217,6 +217,52 @@ function debouncedSyncConversation(convoId: string, delayMs = 1500) {
 
 // ─── Store ───────────────────────────────────────────────────
 
+/**
+ * Flush all pending debounced syncs immediately.
+ * Called on beforeunload to prevent data loss when the app closes
+ * during the debounce window.
+ */
+function flushAllPendingSyncs() {
+  const pendingIds = Object.keys(_syncTimers);
+  if (pendingIds.length === 0) return;
+
+  for (const convoId of pendingIds) {
+    clearTimeout(_syncTimers[convoId]);
+    delete _syncTimers[convoId];
+
+    const state = useAppStore.getState();
+    const convo = state.conversations.find((c) => c.id === convoId);
+    if (!convo || !state.backendReady) continue;
+
+    const cleanMessages = convo.messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+      attachments: m.attachments?.map((a) => ({
+        name: a.name,
+        type: a.type,
+        size: a.size,
+        indexed: a.indexed,
+        url: a.url,
+      })),
+    }));
+
+    // Use sendBeacon for reliability during page unload
+    const payload = JSON.stringify({ title: convo.title, messages: cleanMessages });
+    const url = `http://127.0.0.1:8742/api/conversations/${convoId}`;
+    const blob = new Blob([payload], { type: 'application/json' });
+    navigator.sendBeacon(url, blob);
+  }
+}
+
+// Register flush on page unload
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushAllPendingSyncs);
+}
+
+
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => {

@@ -7,6 +7,7 @@ import { SpacesView } from './components/SpacesView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
 import { ToastContainer } from './components/Toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAppStore } from './stores/appStore';
 import { checkHealth, fetchOllamaModels, updateProvider } from './lib/api';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -90,7 +91,9 @@ function App() {
       <TitleBar />
       <TabNav />
       <div className="content">
-        {renderContent()}
+        <ErrorBoundary>
+          {renderContent()}
+        </ErrorBoundary>
       </div>
       <ToastContainer />
     </div>

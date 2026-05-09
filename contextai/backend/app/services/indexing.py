@@ -23,8 +23,8 @@ def get_space_index(space_id: str) -> SpaceIndex:
     return _index_cache[space_id]
 
 
-def index_file(space_id: str, file_path: str) -> dict:
-    """Parse, chunk, and index a single file into a Space's RAG index.
+async def index_file(space_id: str, file_path: str) -> dict:
+    """Parse, chunk, contextualize, and index a single file into a Space's RAG index.
     
     Returns:
         Dict with indexing results: chunks_created, doc_type, etc.
@@ -57,6 +57,13 @@ def index_file(space_id: str, file_path: str) -> dict:
             "doc_type": doc_type,
         }
 
+    # 3.5 Contextual chunking (if LLM available)
+    try:
+        from app.services.chunking import contextualize_chunks
+        chunks = await contextualize_chunks(chunks, text)
+    except Exception as e:
+        logger.debug(f"Contextual chunking skipped: {e}")
+
     # 4. Build chunk dicts for indexing
     chunk_dicts = []
     for chunk in chunks:
@@ -80,6 +87,7 @@ def index_file(space_id: str, file_path: str) -> dict:
         "chunks_created": len(chunk_dicts),
         "total_chars": len(text),
         "total_chunks_in_space": index.chunk_count,
+        "contextualized": sum(1 for c in chunks if c.contextualized_text),
     }
     logger.info(f"Indexed '{filename}': {len(chunk_dicts)} chunks ({doc_type})")
     return result
@@ -100,7 +108,7 @@ def remove_file_from_index(space_id: str, filename: str) -> dict:
     }
 
 
-def reindex_space(space_id: str) -> dict:
+async def reindex_space(space_id: str) -> dict:
     """Rebuild the entire index for a Space from its raw files.
     
     Clears existing indices and re-indexes all files in raw_files/.
@@ -119,7 +127,7 @@ def reindex_space(space_id: str) -> dict:
     results = []
     for entry in os.scandir(raw_dir):
         if entry.is_file():
-            result = index_file(space_id, entry.path)
+            result = await index_file(space_id, entry.path)
             results.append(result)
 
     total_chunks = sum(r.get("chunks_created", 0) for r in results)

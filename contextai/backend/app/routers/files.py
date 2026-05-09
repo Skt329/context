@@ -12,25 +12,51 @@ DATA_DIR = os.path.join(os.path.expanduser("~"), ".contextai", "spaces")
 
 router = APIRouter()
 
+# ── Upload constraints ────────────────────────────────────────────
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".docx", ".pptx", ".csv", ".txt", ".md", ".markdown",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
+    ".html", ".xml", ".log", ".ini", ".cfg", ".toml", ".rst",
+    ".java", ".cpp", ".c", ".h", ".rs", ".go", ".rb", ".php",
+    ".css", ".scss", ".sql", ".sh", ".bat", ".ps1",
+}
+
 
 @router.post("/{space_id}/upload")
 async def upload_file_endpoint(space_id: str, file: UploadFile = File(...)):
     """Upload a file to a Space, parse, chunk, and index it."""
+    # Validate file extension
+    filename = file.filename or "unnamed"
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: '{ext}'. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
     space_dir = os.path.join(DATA_DIR, space_id)
     os.makedirs(space_dir, exist_ok=True)
 
     raw_dir = os.path.join(space_dir, "raw_files")
     os.makedirs(raw_dir, exist_ok=True)
 
-    # Save file
-    file_path = os.path.join(raw_dir, file.filename)
+    # Read with size limit
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content) // 1024 // 1024} MB). Maximum allowed: {MAX_FILE_SIZE // 1024 // 1024} MB",
+        )
+
+    # Save file
+    file_path = os.path.join(raw_dir, filename)
     with open(file_path, "wb") as f:
         f.write(content)
 
     # Index into RAG pipeline
     try:
-        index_result = index_file(space_id, file_path)
+        index_result = await index_file(space_id, file_path)
     except Exception as e:
         logger.error(f"Indexing failed for {file.filename}: {e}")
         index_result = {"status": "error", "error": str(e)}
@@ -101,7 +127,7 @@ async def reindex(space_id: str):
         raise HTTPException(status_code=404, detail="Space not found")
 
     try:
-        result = reindex_space(space_id)
+        result = await reindex_space(space_id)
     except Exception as e:
         logger.error(f"Reindex failed for space '{space_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
