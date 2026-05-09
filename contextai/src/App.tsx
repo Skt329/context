@@ -90,7 +90,12 @@ function App() {
     <div className="widget-shell">
       <TitleBar />
       <TabNav />
-      <div className="content">
+      <div
+          className="content"
+          role="tabpanel"
+          id={`panel-${activeTab}`}
+          aria-labelledby={`tab-${activeTab}`}
+        >
         <ErrorBoundary>
           {renderContent()}
         </ErrorBoundary>

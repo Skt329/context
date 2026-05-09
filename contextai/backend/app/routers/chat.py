@@ -237,8 +237,9 @@ def _build_user_content(message: str, images: list[ChatImage] | None = None):
 async def _stream_litellm(
     messages: list[dict], provider_id: str, config: dict
 ) -> AsyncGenerator[str, None]:
-    """Stream response chunks from LiteLLM with token usage tracking."""
+    """Stream response chunks from LiteLLM with token usage tracking and heartbeat."""
     import litellm
+    import time
 
     model = _build_litellm_model(provider_id, config)
     api_key = config.get("api_key")
@@ -260,10 +261,19 @@ async def _stream_litellm(
     try:
         response = await litellm.acompletion(**kwargs)
         usage_data = None
+        last_heartbeat = time.time()
+
         async for chunk in response:
+            # Send heartbeat every 15s if no data (SSE comment, client ignores)
+            now = time.time()
+            if now - last_heartbeat > 15:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+
             delta = chunk.choices[0].delta
             if delta.content:
                 yield f"data: {json.dumps({'content': delta.content})}\n\n"
+                last_heartbeat = time.time()
 
             # Capture usage from final chunk
             if hasattr(chunk, "usage") and chunk.usage:

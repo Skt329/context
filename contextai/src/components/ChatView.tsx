@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image, Download } from 'lucide-react';
+import { Send, Square, Sparkles, FileText, Mail, BookOpen, X, Zap, WifiOff, PlusCircle, Paperclip, Image, Download, ChevronDown } from 'lucide-react';
 import { useAppStore, type ChatAttachment } from '../stores/appStore';
-import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl, generateTitle, rateMessage } from '../lib/api';
+import { streamChat, captureScreenContext, uploadFile, extractMemoryFromChat, uploadAttachment, attachmentUrl, generateTitle, rateMessage, type TokenUsage } from '../lib/api';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageActions } from './MessageActions';
 import { SpaceSwitcher } from './SpaceSwitcher';
+import { DropZone } from './DropZone';
 import { toast } from './Toast';
 
 export function ChatView() {
@@ -45,6 +46,7 @@ export function ChatView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const titleGeneratedRef = useRef<Set<string>>(new Set());
+  const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
 
   // File objects stored separately (not serializable)
   const pendingFilesRef = useRef<Map<string, File>>(new Map());
@@ -181,6 +183,8 @@ export function ChatView() {
         imagePayload,
         conversationHistory,
         abortCtrl.signal,
+        (usage) => setLastUsage(usage),
+        (warning) => toast.info(warning),
       );
 
       // Auto-title on first user message
@@ -383,8 +387,37 @@ export function ChatView() {
       prompt: 'Draft a personalized cold outreach email based on the current context. Be concise and professional.',
     },
   ];
+  // Source citation extraction from [N] markers
+  const extractCitations = (content: string): string[] => {
+    const matches = content.match(/\[(\d+)\]/g);
+    if (!matches) return [];
+    return [...new Set(matches)];
+  };
 
   return (
+    <DropZone
+      onFilesDropped={(files) => {
+        for (const file of files) {
+          const attachId = crypto.randomUUID();
+          const isImage = file.type.startsWith('image/');
+          const attachment: ChatAttachment = {
+            name: `${attachId}::${file.name}`,
+            type: isImage ? 'image' : 'file',
+            size: file.size,
+          };
+          pendingFilesRef.current.set(attachId, file);
+          if (isImage) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              attachment.dataUrl = reader.result as string;
+              setAttachments((prev) => [...prev]);
+            };
+            reader.readAsDataURL(file);
+          }
+          setAttachments((prev) => [...prev, attachment]);
+        }
+      }}
+    >
     <div className="chat-view">
       {/* Chat header */}
       <div className="chat-header">
@@ -449,7 +482,7 @@ export function ChatView() {
         ) : (
           <>
             {messages.map((msg) => (
-              <div key={msg.id} className={`message message--${msg.role}`}>
+              <div key={msg.id} className={`message message--${msg.role}`} role="article" aria-label={`${msg.role} message`}>
                 <div className="message__bubble">
                   {msg.attachments?.filter((a) => a.type === 'image' && (a.dataUrl || a.url)).map((a, i) => (
                     <img key={i} src={a.url ? attachmentUrl(a.url) : a.dataUrl} alt={a.name} className="message__attachment-img" />
@@ -467,6 +500,24 @@ export function ChatView() {
                   )}
                   {msg.isStreaming && !msg.content && (
                     <span className="loading-dots"><span></span><span></span><span></span></span>
+                  )}
+                  {/* Source citations collapsible */}
+                  {msg.role === 'assistant' && !msg.isStreaming && extractCitations(msg.content).length > 0 && (
+                    <details className="source-citations" style={{ marginTop: '8px', fontSize: '11px' }}>
+                      <summary style={{
+                        cursor: 'pointer', color: 'var(--text-muted)',
+                        display: 'flex', alignItems: 'center', gap: '4px',
+                        userSelect: 'none',
+                      }}>
+                        <ChevronDown size={12} />
+                        {extractCitations(msg.content).length} source{extractCitations(msg.content).length > 1 ? 's' : ''} cited
+                      </summary>
+                      <div style={{ padding: '6px 0 0 16px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                        {extractCitations(msg.content).map((c) => (
+                          <div key={c}>{c} — referenced in response</div>
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </div>
                 <div className="message__footer">
@@ -488,6 +539,24 @@ export function ChatView() {
                 </div>
               </div>
             ))}
+            {/* Token usage badge */}
+            {lastUsage && !isGenerating && (
+              <div style={{
+                display: 'flex', justifyContent: 'center', padding: '4px 0',
+              }}>
+                <div style={{
+                  fontSize: '10px', color: 'var(--text-muted)',
+                  background: 'var(--surface-hover)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '2px 8px',
+                  display: 'flex', gap: '8px',
+                }}>
+                  <span>↑{lastUsage.prompt_tokens}</span>
+                  <span>↓{lastUsage.completion_tokens}</span>
+                  <span>Σ{lastUsage.total_tokens} tokens</span>
+                </div>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </>
         )}
@@ -609,5 +678,6 @@ export function ChatView() {
         </div>
       </div>
     </div>
+    </DropZone>
   );
 }

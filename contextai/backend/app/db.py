@@ -53,6 +53,32 @@ CREATE TABLE IF NOT EXISTS memory (
     updated_at    TEXT NOT NULL,
     UNIQUE(scope, space_id)
 );
+
+-- Full-text search index for conversations (title + message content)
+CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
+    title,
+    messages_text,
+    content=conversations,
+    content_rowid=rowid
+);
+
+-- Keep FTS in sync with conversations table
+CREATE TRIGGER IF NOT EXISTS conversations_fts_insert AFTER INSERT ON conversations BEGIN
+    INSERT INTO conversations_fts(rowid, title, messages_text)
+    VALUES (new.rowid, new.title, new.messages);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversations_fts_update AFTER UPDATE ON conversations BEGIN
+    INSERT INTO conversations_fts(conversations_fts, rowid, title, messages_text)
+    VALUES ('delete', old.rowid, old.title, old.messages);
+    INSERT INTO conversations_fts(rowid, title, messages_text)
+    VALUES (new.rowid, new.title, new.messages);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversations_fts_delete AFTER DELETE ON conversations BEGIN
+    INSERT INTO conversations_fts(conversations_fts, rowid, title, messages_text)
+    VALUES ('delete', old.rowid, old.title, old.messages);
+END;
 """
 
 

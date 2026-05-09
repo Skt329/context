@@ -42,7 +42,14 @@ export async function checkHealth(): Promise<{ status: string; version: string }
   }
 }
 
-/** Stream a chat response from the backend via SSE */
+/** Token usage data from the LLM provider */
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+/** Stream a chat response from the backend via SSE with auto-reconnect */
 export async function streamChat(
   message: string,
   spaceId: string,
@@ -54,75 +61,96 @@ export async function streamChat(
   images?: { data_url: string; name: string }[],
   history?: { role: string; content: string }[],
   signal?: AbortSignal,
+  onUsage?: (usage: TokenUsage) => void,
+  onWarning?: (warning: string) => void,
 ): Promise<void> {
-  try {
-    const res = await fetch(`${BASE_URL}/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message,
-        space_id: spaceId,
-        screen_context: screenContext,
-        text_context: textContext || null,
-        images: images && images.length > 0 ? images : null,
-        history: history && history.length > 0 ? history : null,
-      }),
-      signal,
-    });
+  const maxRetries = 2;
 
-    if (!res.ok) {
-      onError(`Backend returned ${res.status}`);
-      onDone();
-      return;
-    }
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(`${BASE_URL}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          space_id: spaceId,
+          screen_context: screenContext,
+          text_context: textContext || null,
+          images: images && images.length > 0 ? images : null,
+          history: history && history.length > 0 ? history : null,
+        }),
+        signal,
+      });
 
-    const reader = res.body?.getReader();
-    if (!reader) {
-      onError('No response body');
-      onDone();
-      return;
-    }
+      if (!res.ok) {
+        onError(`Backend returned ${res.status}`);
+        onDone();
+        return;
+      }
 
-    const decoder = new TextDecoder();
-    let buffer = '';
+      const reader = res.body?.getReader();
+      if (!reader) {
+        onError('No response body');
+        onDone();
+        return;
+      }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') {
-            onDone();
-            return;
-          }
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.content) {
-              onChunk(parsed.content);
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          // Skip SSE comments (heartbeats)
+          if (line.startsWith(':')) continue;
+
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') {
+              onDone();
+              return;
             }
-            if (parsed.error) {
-              onError(parsed.error);
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.content) {
+                onChunk(parsed.content);
+              }
+              if (parsed.usage && onUsage) {
+                onUsage(parsed.usage);
+              }
+              if (parsed.warning && onWarning) {
+                onWarning(parsed.warning);
+              }
+              if (parsed.error) {
+                onError(parsed.error);
+              }
+            } catch {
+              // Non-JSON data, skip
             }
-          } catch {
-            // Non-JSON data, skip
           }
         }
       }
-    }
-    onDone();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
       onDone();
-      return;
+      return; // Success — exit retry loop
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        onDone();
+        return;
+      }
+      if (attempt < maxRetries) {
+        // Wait before retry
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      onError(err instanceof Error ? err.message : 'Connection failed');
+      onDone();
     }
-    onError(err instanceof Error ? err.message : 'Connection failed');
-    onDone();
   }
 }
 
@@ -606,4 +634,72 @@ export function attachmentUrl(relativeUrl: string): string {
   if (relativeUrl.startsWith('data:')) return relativeUrl;
   // relativeUrl is like "/api/attachments/{filename}"
   return `http://127.0.0.1:8742${relativeUrl}`;
+}
+
+
+// ─── Search API ──────────────────────────────────────────────
+
+export interface SearchResult {
+  id: string;
+  spaceId: string;
+  title: string;
+  updatedAt: string;
+  matchPreview: string | null;
+}
+
+/** Full-text search across conversations */
+export async function searchConversations(
+  query: string,
+  spaceId?: string,
+): Promise<SearchResult[]> {
+  try {
+    const params = new URLSearchParams({ q: query });
+    if (spaceId) params.set('space_id', spaceId);
+    const res = await fetch(`${BASE_URL}/conversations/search?${params}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.results || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Export a conversation as Markdown or JSON (triggers download) */
+export async function exportConversation(
+  convoId: string,
+  format: 'markdown' | 'json' = 'markdown',
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `${BASE_URL}/conversations/${convoId}/export?format=${format}`,
+    );
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = format === 'json' ? `${convoId}.json` : 'conversation.md';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    // Silent fail
+  }
+}
+
+/** Bulk fetch full conversations (eliminates N+1) */
+export async function bulkFetchConversations(
+  ids: string[],
+): Promise<any[]> {
+  try {
+    const res = await fetchWithRetry(`${BASE_URL}/conversations/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.conversations || [];
+  } catch {
+    return [];
+  }
 }

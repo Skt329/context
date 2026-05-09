@@ -248,3 +248,147 @@ async def get_conversations_bulk(body: dict):
         return {"conversations": [_row_to_convo(r) for r in rows]}
     finally:
         conn.close()
+
+
+# ── Full-Text Search ─────────────────────────────────────────
+
+@router.get("/search")
+async def search_conversations(
+    q: str = Query(..., min_length=2),
+    space_id: Optional[str] = Query(None),
+):
+    """Full-text search across all conversations using FTS5."""
+    conn = get_db()
+    try:
+        # Sanitize query for FTS5 — wrap words in quotes to avoid syntax errors
+        safe_q = " ".join(f'"{w}"' for w in q.split() if w.strip())
+        if not safe_q:
+            return {"results": [], "query": q}
+
+        if space_id:
+            rows = conn.execute(
+                """SELECT c.id, c.space_id, c.title, c.updated_at,
+                          snippet(conversations_fts, 1, '<mark>', '</mark>', '...', 48) as match_preview
+                   FROM conversations_fts f
+                   JOIN conversations c ON c.rowid = f.rowid
+                   WHERE conversations_fts MATCH ? AND c.space_id = ?
+                   ORDER BY rank
+                   LIMIT 20""",
+                (safe_q, space_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT c.id, c.space_id, c.title, c.updated_at,
+                          snippet(conversations_fts, 1, '<mark>', '</mark>', '...', 48) as match_preview
+                   FROM conversations_fts f
+                   JOIN conversations c ON c.rowid = f.rowid
+                   WHERE conversations_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT 20""",
+                (safe_q,),
+            ).fetchall()
+
+        results = [
+            {
+                "id": row["id"],
+                "spaceId": row["space_id"],
+                "title": row["title"],
+                "updatedAt": row["updated_at"],
+                "matchPreview": row["match_preview"],
+            }
+            for row in rows
+        ]
+        return {"results": results, "query": q}
+    except Exception as e:
+        logger.warning(f"FTS search failed for '{q}': {e}")
+        # Fallback to LIKE search if FTS has issues
+        rows = conn.execute(
+            """SELECT id, space_id, title, updated_at FROM conversations
+               WHERE title LIKE ? OR messages LIKE ?
+               ORDER BY updated_at DESC LIMIT 20""",
+            (f"%{q}%", f"%{q}%"),
+        ).fetchall()
+        return {
+            "results": [
+                {
+                    "id": row["id"],
+                    "spaceId": row["space_id"],
+                    "title": row["title"],
+                    "updatedAt": row["updated_at"],
+                    "matchPreview": None,
+                }
+                for row in rows
+            ],
+            "query": q,
+        }
+    finally:
+        conn.close()
+
+
+# ── Export ────────────────────────────────────────────────────
+
+@router.get("/{convo_id}/export")
+async def export_conversation(
+    convo_id: str,
+    format: str = Query("markdown", pattern="^(markdown|json)$"),
+):
+    """Export a conversation as Markdown or JSON."""
+    from fastapi.responses import Response
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (convo_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        convo = _row_to_convo(row)
+
+        if format == "json":
+            return Response(
+                content=json.dumps(convo, indent=2, ensure_ascii=False),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{convo_id}.json"'
+                },
+            )
+
+        # Markdown format
+        safe_title = convo["title"].replace('"', '\\"')
+        md = f"# {convo['title']}\n\n"
+        md += f"*Space: {convo['spaceId']} | Created: {convo['createdAt']}*\n\n---\n\n"
+        for msg in convo.get("messages", []):
+            role = "**You**" if msg.get("role") == "user" else "**Assistant**"
+            md += f"{role}:\n\n{msg.get('content', '')}\n\n---\n\n"
+
+        return Response(
+            content=md,
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_title[:50]}.md"'
+            },
+        )
+    finally:
+        conn.close()
+
+
+# ── FTS Rebuild (admin helper) ────────────────────────────────
+
+@router.post("/rebuild-fts")
+async def rebuild_fts():
+    """Rebuild the FTS5 index from existing conversations. Idempotent."""
+    conn = get_db()
+    try:
+        # Clear and repopulate
+        conn.execute("DELETE FROM conversations_fts")
+        conn.execute(
+            """INSERT INTO conversations_fts(rowid, title, messages_text)
+               SELECT rowid, title, messages FROM conversations"""
+        )
+        conn.commit()
+        count = conn.execute("SELECT count(*) FROM conversations_fts").fetchone()[0]
+        return {"status": "rebuilt", "indexed": count}
+    finally:
+        conn.close()
+
