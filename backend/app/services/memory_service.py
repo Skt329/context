@@ -200,6 +200,20 @@ def _extract_facts_regex(messages: list[dict]) -> list[str]:
 
 # ─── Semantic Deduplication ───────────────────────────────────
 
+_embedding_model = None
+
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("Loaded SentenceTransformer model for memory deduplication")
+        except ImportError:
+            return None
+    return _embedding_model
+
+
 def _is_duplicate_fact(space_id: str, new_fact: str, threshold: float = 0.85) -> bool:
     """Check if a fact is semantically similar to existing memories.
 
@@ -231,11 +245,10 @@ def _is_duplicate_fact(space_id: str, new_fact: str, threshold: float = 0.85) ->
     if not clean_facts:
         return False
 
-    try:
-        from sentence_transformers import SentenceTransformer
+    model = _get_embedding_model()
+    if model is not None:
         import numpy as np
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
         new_embedding = model.encode([new_fact])
         existing_embeddings = model.encode(clean_facts)
 
@@ -251,8 +264,7 @@ def _is_duplicate_fact(space_id: str, new_fact: str, threshold: float = 0.85) ->
             )
             return True
         return False
-
-    except ImportError:
+    else:
         # Fallback: simple substring match
         fact_lower = new_fact.lower()
         return any(fact_lower in f.lower() or f.lower() in fact_lower for f in clean_facts)
